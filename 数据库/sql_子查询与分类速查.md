@@ -1,0 +1,169 @@
+## 1. 什么是子查询（Subquery）
+子查询是**嵌套在另一条 SQL 语句内部**的 `SELECT` 查询，用来为外层语句提供：
+- **一个值**（如平均值、最大值等）
+- **一列值集合**（用于 `IN`、`ANY/ALL`）
+- **一张临时结果表**（用于二次查询、聚合、连接）
+- **存在性判断**（`EXISTS` / `NOT EXISTS`）
+
+子查询可以出现在 `SELECT / FROM / WHERE / HAVING / INSERT / UPDATE / DELETE` 等位置。
+
+---
+
+## 2. 子查询的常见分类方式
+
+### 2.1 按“是否依赖外层”分类
+
+#### A) 非相关子查询（Non-correlated Subquery）
+子查询**可独立执行**，不引用外层表的列。
+
+示例：找工资高于全表平均工资的员工
+```sql
+SELECT emp_id, salary
+FROM employees
+WHERE salary > (SELECT AVG(salary) FROM employees);
+```
+
+#### B) 相关子查询（Correlated Subquery）
+子查询**依赖外层行**，通常会引用外层表别名列；逻辑上像“对外层每一行执行一次子查询”。
+
+示例：找工资高于本部门平均工资的员工
+```sql
+SELECT e.emp_id, e.dept_id, e.salary
+FROM employees e
+WHERE e.salary > (
+  SELECT AVG(e2.salary)
+  FROM employees e2
+  WHERE e2.dept_id = e.dept_id
+);
+```
+
+> 实务提示：相关子查询可读性强，但在大表上可能更慢；很多情况下可改写为 `JOIN + GROUP BY` 或窗口函数。
+
+---
+
+### 2.2 按“子查询返回结果的形态”分类（最重要）
+
+#### A) 标量子查询（Scalar Subquery）
+返回 **1 行 1 列**（一个值）。常用于与单值比较。
+
+```sql
+SELECT emp_id
+FROM employees
+WHERE salary = (SELECT MAX(salary) FROM employees);
+```
+
+#### B) 单行子查询（Single-row Subquery）
+返回 **1 行多列**（一行记录）。常与行构造器比较（MySQL 支持）。
+
+```sql
+SELECT *
+FROM employees
+WHERE (dept_id, job_id) = (
+  SELECT dept_id, job_id
+  FROM employees
+  WHERE emp_id = 100
+);
+```
+
+#### C) 多行子查询（Multi-row Subquery）
+返回 **多行**（一列或多列）。常配合 `IN / ANY / ALL / EXISTS`。
+
+- 多行单列：
+```sql
+SELECT *
+FROM employees
+WHERE dept_id IN (SELECT dept_id FROM departments WHERE location_id = 1700);
+```
+
+- 多行多列：通常用于 `EXISTS` 或 `FROM` 子查询（派生表）。
+
+> 注意：把多行子查询当成单值用（如 `= (SELECT ...)`）会报错：子查询返回多行。
+
+---
+
+### 2.3 按“子查询出现的位置”分类
+
+#### A) WHERE 子查询（过滤条件）
+常见：`= / > / < / IN / EXISTS / ANY / ALL`。
+
+- `IN`：与集合比
+- `EXISTS`：只看是否存在匹配行
+
+```sql
+SELECT d.dept_id
+FROM departments d
+WHERE EXISTS (
+  SELECT 1 FROM employees e
+  WHERE e.dept_id = d.dept_id
+);
+```
+
+#### B) SELECT 子查询（计算列）
+通常是**标量子查询**，用于补充展示字段。
+
+```sql
+SELECT e.emp_id,
+       (SELECT d.dept_name FROM departments d WHERE d.dept_id = e.dept_id) AS dept_name
+FROM employees e;
+```
+
+#### C) FROM 子查询（派生表 / Derived Table）
+把子查询当成“临时表”再次查询，通常需要别名。
+
+```sql
+SELECT t.dept_id, t.avg_salary
+FROM (
+  SELECT dept_id, AVG(salary) AS avg_salary
+  FROM employees
+  GROUP BY dept_id
+) t
+WHERE t.avg_salary > 10000;
+```
+
+#### D) HAVING 子查询（分组后过滤）
+用于“组级条件”与其它聚合结果比较。
+
+```sql
+SELECT dept_id, AVG(salary) AS avg_salary
+FROM employees
+GROUP BY dept_id
+HAVING AVG(salary) > (SELECT AVG(salary) FROM employees);
+```
+
+#### E) DML 子查询（INSERT/UPDATE/DELETE）
+- `INSERT INTO ... SELECT ...`
+- `UPDATE ... SET col = (SELECT ...)`
+- `DELETE ... WHERE ... (SELECT ...)`
+
+---
+
+## 3. 子查询常用语义型分类（配套关键字）
+
+### 3.1 `IN` / `NOT IN`
+- 适合：多行单列集合匹配
+- 注意：`NOT IN` 遇到子查询结果含 `NULL` 时，可能导致结果“全不匹配”（三值逻辑陷阱）。更稳妥常用 `NOT EXISTS`。
+
+### 3.2 `EXISTS` / `NOT EXISTS`
+- 只关心“是否存在行”，不关心返回列内容
+- 常用于相关子查询、反连接（anti-join）
+
+### 3.3 `ANY` / `SOME` 与 `ALL`
+- `x > ANY (subq)`：x 大于子查询结果中**任意一个**即可（相当于 > 最小值）
+- `x > ALL (subq)`：x 必须大于子查询结果中**所有值**（相当于 > 最大值）
+
+---
+
+## 4. 什么时候优先用子查询
+- 你需要一个“整体统计量”作为条件（如“高于平均值”）
+- 你需要做存在性判断（`EXISTS`）
+- 你希望先聚合/去重/筛选，再对结果二次查询（FROM 派生表）
+
+## 5. 常见错误速记
+1. **多行子查询当单值用**：`= (SELECT ...)` 但返回多行 → 报错
+2. `NOT IN` + 子查询含 `NULL` → 可能返回 0 行（建议改 `NOT EXISTS`）
+3. FROM 子查询忘记取别名 → 报错（多数数据库要求派生表必须有别名）
+
+---
+
+如果你告诉我你用的数据库（MySQL/Oracle/PostgreSQL/SQL Server）和教材口径，我可以把上面分类对齐到对应方言，并给你 5 道典型子查询练习题（含标准答案与模拟输出）。
+
