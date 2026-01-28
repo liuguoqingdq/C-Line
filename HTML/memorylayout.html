@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ 内存布局可视化演示 (优化版)</title>
+    <style>
+        :root {
+            --stack-color: #3b82f6;
+            --heap-color: #f59e0b;
+            --data-color: #10b981;
+            --text-color: #64748b;
+            --bg-color: #f8fafc;
+            --memory-bg: #e2e8f0;
+            --border-color: #cbd5e1;
+            --danger-color: #ef4444;
+            --safe-color: #64748b;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            max-width: 1200px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0;
+            color: #1e293b;
+            font-size: 1.5rem;
+        }
+
+        .btn-reset {
+            background-color: #fff;
+            border: 2px solid var(--danger-color);
+            color: var(--danger-color);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        .btn-reset:hover {
+            background-color: var(--danger-color);
+            color: white;
+        }
+
+        .main-container {
+            display: flex;
+            gap: 40px;
+            width: 100%;
+            max-width: 1200px;
+            height: calc(100% - 80px);
+            overflow: hidden;
+        }
+
+        /* 左侧控制区 */
+        .controls-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+        }
+
+        .control-group {
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .control-group h3 {
+            margin: 0 0 10px 0;
+            font-size: 0.95rem;
+            color: #475569;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-group h3::before {
+            content: '';
+            display: block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        .group-stack h3::before { background: var(--stack-color); }
+        .group-heap h3::before { background: var(--heap-color); }
+        .group-data h3::before { background: var(--data-color); }
+
+        button {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 8px;
+            border: 1px solid var(--border-color);
+            background-color: white;
+            color: #334155;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: 600;
+            text-align: left;
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: #f1f5f9;
+            transform: translateX(4px);
+            border-color: #94a3b8;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background-color: #f8fafc;
+            border-color: #e2e8f0;
+            color: #94a3b8;
+        }
+
+        .btn-action-delete {
+            border-color: #fecaca;
+            color: #b91c1c;
+        }
+        .btn-action-delete:hover:not(:disabled) {
+            background-color: #fef2f2;
+            border-color: #ef4444;
+        }
+
+        .btn-action-null {
+            border-color: #cbd5e1;
+            color: #475569;
+        }
+        .btn-action-null:hover:not(:disabled) {
+            background-color: #e2e8f0;
+            border-color: #94a3b8;
+        }
+
+        .log-panel {
+            flex: 1;
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            overflow-y: auto;
+            border: 1px solid #334155;
+            min-height: 150px;
+        }
+
+        .log-entry { 
+            margin-bottom: 6px; 
+            border-bottom: 1px solid #334155; 
+            padding-bottom: 4px;
+            animation: fadeIn 0.3s;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .log-time { color: #64748b; font-size: 0.8em; margin-right: 8px; }
+        .log-tag { font-weight: bold; margin-right: 5px; }
+        .tag-stack { color: #60a5fa; }
+        .tag-heap { color: #fbbf24; }
+        .tag-data { color: #34d399; }
+        .tag-sys { color: #a78bfa; }
+
+        /* 右侧内存可视化区 */
+        .memory-wrapper {
+            flex: 1.2;
+            display: flex;
+            flex-direction: column;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        .address-label {
+            font-family: monospace;
+            color: #64748b;
+            font-size: 0.8rem;
+            text-align: right;
+            padding-right: 10px;
+            width: 100%;
+            border-bottom: 1px dashed #cbd5e1;
+            margin-bottom: 5px;
+        }
+
+        .memory-bar {
+            flex: 1;
+            background-color: var(--memory-bg);
+            border: 2px solid #94a3b8;
+            border-radius: 6px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* 内存区域定义 */
+        .segment {
+            width: 100%;
+            transition: all 0.5s ease;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        .segment-stack {
+            border-bottom: 2px dashed var(--stack-color);
+            background-color: rgba(59, 130, 246, 0.05);
+            min-height: 40px;
+            justify-content: flex-start;
+            padding-top: 20px;
+        }
+
+        .segment-free {
+            flex: 1;
+            background: repeating-linear-gradient(
+                45deg,
+                #e2e8f0,
+                #e2e8f0 10px,
+                #f1f5f9 10px,
+                #f1f5f9 20px
+            );
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #94a3b8;
+            font-size: 0.9rem;
+            font-style: italic;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.05);
+        }
+
+        .segment-heap {
+            border-top: 2px dashed var(--heap-color);
+            background-color: rgba(245, 158, 11, 0.05);
+            min-height: 40px;
+            justify-content: flex-end;
+            padding-bottom: 20px;
+        }
+
+        .segment-data {
+            background-color: rgba(16, 185, 129, 0.05);
+            border-top: 2px solid var(--data-color);
+            min-height: 60px;
+            justify-content: flex-end;
+            padding-bottom: 20px;
+        }
+
+        .segment-text {
+            background-color: #cbd5e1;
+            color: #475569;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.8rem;
+            border-top: 2px solid #64748b;
+        }
+
+        /* 内存块样式 */
+        .memory-block {
+            width: 90%;
+            margin: 2px;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-family: monospace;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            animation: slideIn 0.3s ease-out;
+            position: relative;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .block-stack { border-left: 4px solid var(--stack-color); }
+        .block-heap { border-left: 4px solid var(--heap-color); }
+        .block-data { border-left: 4px solid var(--data-color); }
+        
+        .var-name { font-weight: bold; color: #334155; }
+        .var-val { color: #64748b; }
+        
+        /* 悬空指针样式 */
+        .dangling { 
+            border-color: #ef4444 !important; 
+            background-color: #fef2f2;
+        }
+        .dangling .var-val { 
+            color: #ef4444; 
+            text-decoration: line-through; 
+        }
+        .dangling-tag { 
+            color: #ef4444; 
+            font-weight: bold; 
+            font-size: 0.7em; 
+            margin-left: 5px; 
+            border: 1px solid #ef4444;
+            padding: 0 4px;
+            border-radius: 4px;
+        }
+
+        /* 空指针样式 */
+        .null-ptr {
+            border-color: #94a3b8 !important;
+            background-color: #f1f5f9;
+            opacity: 0.8;
+        }
+        .null-ptr .var-name { color: #64748b; }
+        .null-ptr .var-val { color: #64748b; font-weight: bold; }
+
+        /* 栈帧样式 */
+        .stack-frame {
+            width: 94%;
+            border: 2px solid #93c5fd;
+            background: rgba(255,255,255,0.8);
+            margin: 5px 0;
+            padding: 20px 5px 5px 5px;
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column-reverse;
+            align-items: center;
+            position: relative;
+            animation: frameEnter 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes frameEnter { from { transform: scale(0.9) translateY(-10px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
+        
+        .stack-frame::before {
+            content: attr(data-func-name);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: #eff6ff;
+            color: #1e40af;
+            font-size: 0.75rem;
+            font-weight: bold;
+            padding: 2px 8px;
+            border-bottom: 1px solid #93c5fd;
+            text-align: center;
+        }
+
+        /* 标签 */
+        .segment-label {
+            position: absolute;
+            right: 8px;
+            font-size: 0.7rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            pointer-events: none;
+            opacity: 0.5;
+        }
+        .label-stack { top: 5px; color: var(--stack-color); }
+        .label-heap { bottom: 5px; color: var(--heap-color); }
+        .label-data { bottom: 5px; color: var(--data-color); }
+
+        /* 指针连线 (SVG) */
+        #connections {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        path.pointer-arrow {
+            fill: none;
+            stroke: #ef4444;
+            stroke-width: 2;
+            marker-end: url(#arrowhead);
+            stroke-dasharray: 4,4;
+            opacity: 0.8;
+        }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>C++ 内存模型可视化 (Memory Layout)</h1>
+        <button class="btn-reset" style="width: auto;" onclick="viz.resetAll()">⟳ 重置程序 (Restart)</button>
+    </header>
+
+    <div class="main-container">
+        
+        <!-- 左侧控制面板 -->
+        <div class="controls-area">
+            <div class="control-group">
+                <h3>程序控制 (Text/Stack)</h3>
+                <button class="btn-func" onclick="viz.callFunction('main')">int main() { ... }</button>
+                <button class="btn-func" onclick="viz.callFunction('func')" id="btn-call-foo" disabled>func() { ... }</button>
+                <button class="btn-func" onclick="viz.returnFunction()" id="btn-return" disabled>return;</button>
+            </div>
+
+            <div class="control-group group-stack">
+                <h3>栈分配 (Stack)</h3>
+                <button onclick="viz.addStackVar('int', 4)">int a = 10;</button>
+                <button onclick="viz.addStackArray()">int arr[5];</button>
+            </div>
+
+            <div class="control-group group-heap">
+                <h3>堆分配 (Heap)</h3>
+                <button onclick="viz.newInt()">int* p = new int(99);</button>
+                <button onclick="viz.newArray()">int* arr = new int[10];</button>
+                <div style="display:flex; gap:5px;">
+                    <button class="btn-action-delete" onclick="viz.deleteLast()" id="btn-delete" disabled style="flex:1;">delete p;</button>
+                    <button class="btn-action-null" onclick="viz.setNullptr()" id="btn-nullptr" disabled style="flex:1;">p = nullptr;</button>
+                </div>
+            </div>
+
+            <div class="control-group group-data">
+                <h3>全局/静态 (Data)</h3>
+                <button onclick="viz.addGlobal('int g_var', 4)">int g_var = 1;</button>
+                <button onclick="viz.addStatic('static int s_var', 4)">static int s_var = 0;</button>
+            </div>
+
+            <div class="log-panel" id="logPanel">
+                <!-- Logs -->
+            </div>
+        </div>
+
+        <!-- 右侧内存展示 -->
+        <div class="memory-wrapper">
+            <div class="address-label">High Address (0xFFFFFFFF)</div>
+            
+            <div class="memory-bar">
+                <svg id="connections">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+                        refX="9" refY="3.5" orient="auto">
+                          <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
+                        </marker>
+                    </defs>
+                </svg>
+
+                <!-- 栈区 -->
+                <div class="segment segment-stack" id="stackSegment">
+                    <div class="segment-label label-stack">STACK (栈)</div>
+                </div>
+
+                <!-- 自由空间 -->
+                <div class="segment segment-free">
+                    Free Memory
+                </div>
+
+                <!-- 堆区 -->
+                <div class="segment segment-heap" id="heapSegment">
+                    <div class="segment-label label-heap">HEAP (堆)</div>
+                </div>
+
+                <!-- 数据区 -->
+                <div class="segment segment-data" id="dataSegment">
+                    <div class="segment-label label-data">GLOBAL (全局/静态)</div>
+                </div>
+
+                <!-- 代码区 -->
+                <div class="segment segment-text">
+                    TEXT SEGMENT (机器代码)
+                </div>
+            </div>
+
+            <div class="address-label" style="text-align: left; border-bottom: none; border-top: 1px dashed #cbd5e1; margin-top: 5px;">Low Address (0x00000000)</div>
+        </div>
+    </div>
+
+<script>
+class MemoryVisualizer {
+    constructor() {
+        this.stackContainer = document.getElementById('stackSegment');
+        this.heapContainer = document.getElementById('heapSegment');
+        this.dataContainer = document.getElementById('dataSegment');
+        this.logPanel = document.getElementById('logPanel');
+        this.svg = document.getElementById('connections');
+        
+        this.resetAll();
+    }
+
+    resetAll() {
+        // 清空所有容器
+        this.stackContainer.innerHTML = '<div class="segment-label label-stack">STACK (栈)</div>';
+        this.heapContainer.innerHTML = '<div class="segment-label label-heap">HEAP (堆)</div>';
+        this.dataContainer.innerHTML = '<div class="segment-label label-data">GLOBAL (全局/静态)</div>';
+        this.logPanel.innerHTML = '';
+        // Reset SVG but keep defs
+        const defs = this.svg.querySelector('defs');
+        this.svg.innerHTML = '';
+        if(defs) this.svg.appendChild(defs);
+
+        this.stackFrames = [];
+        this.heapBlocks = []; // { id, heapId, ptrEl, heapEl, isDeleted, isNullptr }
+        this.pointers = [];
+        this.varCounters = { p: 0, arr: 0, a: 0, g: 0, s: 0 };
+        
+        this.log('SYS', '系统重置完成。内存已清空。');
+        this.log('SYS', '请从 main() 开始执行。');
+        this.updateButtons();
+    }
+
+    log(type, msg) {
+        const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        
+        let tagClass = 'tag-sys';
+        if (type === 'STACK') tagClass = 'tag-stack';
+        if (type === 'HEAP') tagClass = 'tag-heap';
+        if (type === 'DATA') tagClass = 'tag-data';
+
+        entry.innerHTML = `<span class="log-time">${time}</span><span class="log-tag ${tagClass}">[${type}]</span> ${msg}`;
+        this.logPanel.prepend(entry);
+    }
+
+    // --- 栈操作 ---
+
+    callFunction(name) {
+        if (name === 'main' && this.stackFrames.length > 0) return;
+
+        const frame = document.createElement('div');
+        frame.className = 'stack-frame';
+        frame.setAttribute('data-func-name', name + '()');
+        frame.id = `frame-${this.stackFrames.length}`;
+        
+        this.stackContainer.appendChild(frame);
+        this.stackFrames.push(frame);
+        
+        this.log('STACK', `Push Stack Frame: ${name}()`);
+        this.updateButtons();
+    }
+
+    returnFunction() {
+        if (this.stackFrames.length === 0) return;
+        
+        const frame = this.stackFrames.pop();
+        
+        // 1. 查找此栈帧内的所有指针，移除它们的连线
+        // 使用 document.body.contains 确保元素还在页面上（虽然逻辑上在栈帧里）
+        const framePointers = this.heapBlocks.filter(b => frame.contains(b.ptrEl));
+        
+        framePointers.forEach(block => {
+            // 移除连线
+            this.removePointerLine(block.ptrEl);
+            // 注意：如果在 C++ 中指针销毁了但没 delete，堆内存是泄露的 (Memory Leak)
+            if (!block.isDeleted) {
+                block.heapEl.style.backgroundColor = '#fca5a5'; // Reddish for leak
+                block.heapEl.innerHTML += ' <span style="color:red;font-size:0.7em">(LEAK!)</span>';
+                this.log('HEAP', `警告: 栈帧销毁导致内存泄露 @ ${block.heapId}`);
+            }
+            // 关键：栈上的指针销毁了，引用也没了，无法再操作
+            block.ptrEl = null; 
+        });
+
+        // 2. 动画移除栈帧
+        frame.style.opacity = '0';
+        frame.style.transform = 'translateX(-20px)';
+        setTimeout(() => frame.remove(), 300);
+        
+        this.log('STACK', `Pop Stack Frame`);
+        this.updateButtons();
+    }
+
+    addStackVar(type, size) {
+        if (this.stackFrames.length === 0) {
+            alert("请先调用 main() 函数！");
+            return;
+        }
+        
+        this.varCounters.a++;
+        const name = `a${this.varCounters.a}`;
+        const currentFrame = this.stackFrames[this.stackFrames.length - 1];
+        
+        const block = this.createBlock(`${type} ${name}`, `${size}B`, 'block-stack');
+        currentFrame.appendChild(block);
+        
+        this.log('STACK', `Alloc Local: ${type} ${name} = ...`);
+    }
+
+    addStackArray() {
+        if (this.stackFrames.length === 0) return;
+        this.varCounters.arr++;
+        const name = `arr${this.varCounters.arr}`;
+        const currentFrame = this.stackFrames[this.stackFrames.length - 1];
+        
+        const block = this.createBlock(`int ${name}[5]`, `20B`, 'block-stack');
+        currentFrame.appendChild(block);
+        this.log('STACK', `Alloc Local Array: ${name}[5]`);
+    }
+
+    // --- 堆操作 ---
+
+    newInt() {
+        if (this.stackFrames.length === 0) {
+            alert("需要栈帧来存储指针变量！");
+            return;
+        }
+
+        this.varCounters.p++;
+        const ptrName = `p${this.varCounters.p}`;
+
+        // 1. 栈上创建指针
+        const currentFrame = this.stackFrames[this.stackFrames.length - 1];
+        const ptrBlock = this.createBlock(`int* ${ptrName}`, `8B`, 'block-stack');
+        ptrBlock.id = `ptr-${this.varCounters.p}`;
+        currentFrame.appendChild(ptrBlock);
+
+        // 2. 堆上创建数据
+        const heapId = `0x${(Math.random()*0xFFFFFF<<0).toString(16).toUpperCase()}`;
+        const heapBlock = this.createBlock(`int(99)`, `4B`, 'block-heap');
+        heapBlock.innerHTML = `<span class="var-name">*${ptrName}</span> <span class="var-val">Addr:${heapId}</span>`;
+        this.heapContainer.insertBefore(heapBlock, this.heapContainer.children[1]);
+
+        // 3. 记录关系
+        this.heapBlocks.push({
+            id: heapId,
+            heapId: heapId,
+            ptrEl: ptrBlock,
+            heapEl: heapBlock,
+            isDeleted: false,
+            isNullptr: false
+        });
+
+        this.log('HEAP', `new int(99) 返回地址 ${heapId} 给 ${ptrName}`);
+        
+        // 4. 连线
+        setTimeout(() => this.drawPointer(ptrBlock, heapBlock), 100);
+        this.updateButtons();
+    }
+
+    newArray() {
+        if (this.stackFrames.length === 0) return;
+        
+        this.varCounters.p++;
+        const ptrName = `p${this.varCounters.p}`;
+
+        // Stack
+        const currentFrame = this.stackFrames[this.stackFrames.length - 1];
+        const ptrBlock = this.createBlock(`int* ${ptrName}`, `8B`, 'block-stack');
+        currentFrame.appendChild(ptrBlock);
+
+        // Heap
+        const heapId = `0x${(Math.random()*0xFFFFFF<<0).toString(16).toUpperCase()}`;
+        const heapBlock = this.createBlock(`int[10]`, `40B`, 'block-heap');
+        heapBlock.innerHTML = `<span class="var-name">arr[]</span> <span class="var-val">Addr:${heapId}</span>`;
+        this.heapContainer.insertBefore(heapBlock, this.heapContainer.children[1]);
+
+        this.heapBlocks.push({
+            id: heapId,
+            heapId: heapId,
+            ptrEl: ptrBlock,
+            heapEl: heapBlock,
+            isDeleted: false,
+            isNullptr: false
+        });
+
+        this.log('HEAP', `new int[10] 返回地址 ${heapId} 给 ${ptrName}`);
+        setTimeout(() => this.drawPointer(ptrBlock, heapBlock), 100);
+        this.updateButtons();
+    }
+
+    deleteLast() {
+        // 找到尚未 delete 的最后一个活跃堆块
+        const activeBlocks = this.heapBlocks.filter(b => !b.isDeleted && b.ptrEl && document.body.contains(b.ptrEl));
+        
+        if (activeBlocks.length === 0) {
+            this.log('HEAP', "没有可释放的堆内存。");
+            return;
+        }
+
+        const target = activeBlocks[activeBlocks.length - 1];
+        target.isDeleted = true;
+
+        // 1. 移除连线（物理连接断开）
+        this.removePointerLine(target.ptrEl);
+
+        // 2. 栈上的指针变成悬空指针 (Dangling Pointer)
+        target.ptrEl.classList.add('dangling');
+        // 保存原始变量名以便显示
+        const originalText = target.ptrEl.querySelector('.var-name').innerText;
+        // 显示原来的地址，但加上删除线和标记
+        target.ptrEl.innerHTML = `<span class="var-name">${originalText}</span> <span class="var-val">${target.heapId}</span> <span class="dangling-tag">DANGLING</span>`;
+
+        // 3. 销毁堆内存
+        target.heapEl.style.transform = 'scale(0)';
+        setTimeout(() => target.heapEl.remove(), 300);
+        
+        this.log('HEAP', `delete ptr; 释放地址 ${target.heapId}，堆内存回收。`);
+        this.log('STACK', `注意: 栈上指针仍指向 ${target.heapId} (悬空指针)`);
+        
+        this.updateButtons();
+    }
+
+    setNullptr() {
+        // 找到所有已 delete 但尚未置空的指针 (悬空指针)
+        const danglingBlocks = this.heapBlocks.filter(b => b.isDeleted && !b.isNullptr && b.ptrEl && document.body.contains(b.ptrEl));
+        
+        if (danglingBlocks.length === 0) return;
+
+        // 处理最近的一个
+        const target = danglingBlocks[danglingBlocks.length - 1];
+        target.isNullptr = true;
+
+        // 样式变更：从危险的红色变为安全的灰色
+        target.ptrEl.classList.remove('dangling');
+        target.ptrEl.classList.add('null-ptr');
+        
+        const originalText = target.ptrEl.querySelector('.var-name').innerText;
+        target.ptrEl.innerHTML = `<span class="var-name">${originalText}</span> <span class="var-val">nullptr</span>`; // 0x0
+
+        this.log('STACK', `${originalText} = nullptr; 指针已安全置空。`);
+        this.updateButtons();
+    }
+
+    // --- 数据区操作 ---
+
+    addGlobal(text, size) {
+        this.varCounters.g++;
+        const name = `g${this.varCounters.g}`;
+        const display = text.replace('g_var', name);
+        
+        const block = this.createBlock(display, `${size}B`, 'block-data');
+        this.dataContainer.appendChild(block);
+        this.log('DATA', `定义全局变量: ${name} (程序结束前不会释放)`);
+    }
+
+    addStatic(text, size) {
+        this.varCounters.s++;
+        const name = `s${this.varCounters.s}`;
+        const display = text.replace('s_var', name);
+
+        const block = this.createBlock(display, `${size}B`, 'block-data');
+        block.style.borderStyle = 'dashed';
+        this.dataContainer.appendChild(block);
+        this.log('DATA', `定义静态变量: ${name} (程序结束前不会释放)`);
+    }
+
+    // --- 辅助 ---
+
+    createBlock(text, size, className) {
+        const div = document.createElement('div');
+        div.className = `memory-block ${className}`;
+        div.innerHTML = `<span class="var-name">${text}</span> <span class="var-val">${size}</span>`;
+        return div;
+    }
+
+    updateButtons() {
+        const hasFrame = this.stackFrames.length > 0;
+        document.getElementById('btn-call-foo').disabled = !hasFrame;
+        document.getElementById('btn-return').disabled = !hasFrame;
+        
+        // delete 按钮：存在尚未 delete 的指针
+        const hasActiveHeap = this.heapBlocks.some(b => !b.isDeleted && b.ptrEl && document.body.contains(b.ptrEl));
+        document.getElementById('btn-delete').disabled = !hasActiveHeap;
+
+        // nullptr 按钮：存在已 delete 但未置空的指针
+        const hasDangling = this.heapBlocks.some(b => b.isDeleted && !b.isNullptr && b.ptrEl && document.body.contains(b.ptrEl));
+        document.getElementById('btn-nullptr').disabled = !hasDangling;
+    }
+
+    drawPointer(fromEl, toEl) {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("class", "pointer-arrow");
+        this.svg.appendChild(path);
+        
+        const updatePath = () => {
+            if (!document.body.contains(fromEl) || !document.body.contains(toEl)) {
+                path.remove();
+                return;
+            }
+            
+            const r1 = fromEl.getBoundingClientRect();
+            const r2 = toEl.getBoundingClientRect();
+            const containerR = this.stackContainer.offsetParent.getBoundingClientRect();
+
+            const startX = r1.right - containerR.left - 5;
+            const startY = r1.top - containerR.top + r1.height / 2;
+            
+            const endX = r2.right - containerR.left - 5;
+            const endY = r2.top - containerR.top + r2.height / 2;
+
+            const ctrlX = Math.max(startX, endX) + 60;
+            const d = `M ${startX} ${startY} C ${ctrlX} ${startY}, ${ctrlX} ${endY}, ${endX} ${endY}`;
+            
+            path.setAttribute("d", d);
+        };
+
+        updatePath();
+        this.pointers.push({ path, from: fromEl, to: toEl, update: updatePath });
+    }
+
+    removePointerLine(fromEl) {
+        this.pointers = this.pointers.filter(p => {
+            if (p.from === fromEl) {
+                p.path.remove();
+                return false;
+            }
+            return true;
+        });
+    }
+
+    animateLoop() {
+        requestAnimationFrame(() => {
+            this.pointers.forEach(p => p.update());
+            this.animateLoop();
+        });
+    }
+}
+
+const viz = new MemoryVisualizer();
+viz.animateLoop();
+
+</script>
+</body>
+</html>

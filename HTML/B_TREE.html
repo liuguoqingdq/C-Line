@@ -1,0 +1,361 @@
+ <!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MySQL InnoDB 宏观架构视图</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState } = React;
+
+        // --- 图标组件定义 (替代 lucide-react 依赖) ---
+        const Database = ({ className }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
+        );
+        const Layers = ({ className }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+        );
+        const Box = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        );
+        const ArrowDown = ({ className }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+        );
+        const HardDrive = ({ className }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></svg>
+        );
+        const Cuboid = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m21.12 6.4-6.05-4.06a2 2 0 0 0-2.2 0L6.83 6.4a2 2 0 0 0-1 1.76v8.12a2 2 0 0 0 1 1.76l6.05 4.06a2 2 0 0 0 2.2 0l6.05-4.06a2 2 0 0 0 1-1.76V8.16a2 2 0 0 0-1-1.76Z"/><path d="M7 8v8"/><path d="M17 8v8"/><path d="M7 8h10"/></svg>
+        );
+
+        const InnodbMacroDemo = () => {
+            // --- 模拟数据 ---
+            
+            // 1. 定义 B+ 树结构 (逻辑视图)
+            const bTreeData = {
+                id: 3,
+                type: 'ROOT', // 根节点
+                level: 2,
+                children: [
+                {
+                    id: 4,
+                    type: 'INTERNAL',
+                    level: 1,
+                    children: [
+                    { id: 6, type: 'LEAF', level: 0, val: '1-100' },
+                    { id: 7, type: 'LEAF', level: 0, val: '101-200' },
+                    { id: 8, type: 'LEAF', level: 0, val: '201-300' }
+                    ]
+                },
+                {
+                    id: 5,
+                    type: 'INTERNAL',
+                    level: 1,
+                    children: [
+                    { id: 9, type: 'LEAF', level: 0, val: '301-400' },
+                    { id: 10, type: 'LEAF', level: 0, val: '401-500' },
+                    { id: 35, type: 'LEAF', level: 0, val: '501-600' } // 碎片页
+                    ]
+                }
+                ]
+            };
+
+            // 模拟 Extent 1 (属于 Leaf Segment)
+            const extent1Map = {
+                6: 'LEAF', 7: 'LEAF', 8: 'LEAF', 9: 'LEAF', 10: 'LEAF'
+            };
+
+            const [hoveredId, setHoveredId] = useState(null);
+            const [selectedInfo, setSelectedInfo] = useState(null);
+
+            // --- 辅助函数 ---
+            const handleInteraction = (id, type, source) => {
+                setHoveredId(id);
+                let info = '';
+                let segmentInfo = '';
+                
+                if (type === 'ROOT' || type === 'INTERNAL') {
+                info = `非叶子节点 (Non-Leaf Node)，用于索引导航。`;
+                segmentInfo = '属于 [非叶子节点段 (Non-Leaf Segment)]';
+                } else if (type === 'LEAF') {
+                info = `叶子节点 (Leaf Node)，存储真实数据。`;
+                segmentInfo = '属于 [叶子节点段 (Leaf Segment)]';
+                } else {
+                info = `未使用或碎片页。`;
+                segmentInfo = '暂无归属';
+                }
+                
+                // 特殊逻辑：Page 35 是碎片
+                if (id === 35) {
+                    segmentInfo += ' (以碎片形式分配)';
+                } else if (id >= 6 && id <= 10) {
+                    segmentInfo += ' (在完整区内分配)';
+                }
+
+                setSelectedInfo({ id, type, info, segmentInfo, source });
+            };
+
+            // 渲染 B+ 树节点
+            const TreeNode = ({ node }) => {
+                const isHovered = hoveredId === node.id;
+                let bgColor = 'bg-white';
+                let borderColor = 'border-slate-300';
+                if (node.type === 'ROOT') { bgColor = 'bg-purple-50'; borderColor = 'border-purple-500'; }
+                else if (node.type === 'INTERNAL') { bgColor = 'bg-blue-50'; borderColor = 'border-blue-500'; }
+                else if (node.type === 'LEAF') { bgColor = 'bg-green-50'; borderColor = 'border-green-500'; }
+
+                if (isHovered) {
+                bgColor = 'bg-yellow-100';
+                borderColor = 'border-yellow-500 ring-2 ring-yellow-300';
+                }
+
+                return (
+                <div className="flex flex-col items-center mx-2">
+                    <div 
+                    className={`
+                        w-24 h-16 border-2 rounded-lg shadow-sm flex flex-col items-center justify-center cursor-pointer transition-all duration-300 z-10
+                        ${bgColor} ${borderColor} ${isHovered ? 'scale-110' : ''}
+                    `}
+                    onMouseEnter={() => handleInteraction(node.id, node.type, 'TREE')}
+                    onClick={() => handleInteraction(node.id, node.type, 'TREE')}
+                    >
+                    <span className="text-xs font-bold text-slate-500">{node.type}</span>
+                    <span className="text-sm font-mono font-bold">Page {node.id}</span>
+                    </div>
+                    
+                    {node.children && (
+                    <>
+                        <div className="h-6 w-0.5 bg-slate-300"></div>
+                        <div className="flex border-t-2 border-slate-300 pt-4">
+                        {node.children.map((child) => (
+                            <TreeNode key={child.id} node={child} />
+                        ))}
+                        </div>
+                    </>
+                    )}
+                </div>
+                );
+            };
+
+            // 渲染物理页小方块
+            const PhysicalPageBlock = ({ pageId, mappedType, isFragment = false }) => {
+                const isHovered = hoveredId === pageId;
+                
+                let colorClass = 'bg-slate-100 border-slate-200 text-slate-300';
+                if (mappedType === 'ROOT') colorClass = 'bg-purple-200 border-purple-400 text-purple-800';
+                if (mappedType === 'INTERNAL') colorClass = 'bg-blue-200 border-blue-400 text-blue-800';
+                if (mappedType === 'LEAF') colorClass = 'bg-green-200 border-green-400 text-green-800';
+                
+                if (isHovered) {
+                    colorClass = 'bg-yellow-400 border-yellow-600 text-yellow-900 scale-125 z-20 shadow-lg';
+                }
+
+                return (
+                <div 
+                    className={`w-6 h-6 border rounded text-[8px] flex items-center justify-center cursor-pointer transition-all relative ${colorClass}`}
+                    title={`Page ID: ${pageId}`}
+                    onMouseEnter={() => mappedType && handleInteraction(pageId, mappedType, 'PHYSICAL')}
+                    onClick={() => mappedType && handleInteraction(pageId, mappedType, 'PHYSICAL')}
+                >
+                    {pageId}
+                    {/* 如果是碎片页，加个小标记 */}
+                    {isFragment && mappedType && <div className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full border border-white"></div>}
+                </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 p-6 flex flex-col font-sans text-slate-700">
+                
+                <header className="mb-8 text-center">
+                    <h1 className="text-3xl font-bold text-slate-800 flex items-center justify-center gap-3">
+                    <Database className="w-8 h-8 text-blue-600" />
+                    MySQL InnoDB 宏观架构视图
+                    </h1>
+                    <p className="text-slate-500 mt-2">
+                    段 (Segment) = 碎片页 (Fragment Pages) + 完整的区 (Full Extents)
+                    </p>
+                </header>
+
+                <div className="flex flex-col lg:flex-row gap-8">
+                    
+                    {/* 左侧：主视图区 */}
+                    <div className="flex-1 flex flex-col gap-8">
+                    
+                    {/* 1. 逻辑层：B+ 树 */}
+                    <div className="bg-white p-6 rounded-xl shadow-md border border-slate-200">
+                        <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-2">
+                        <h2 className="text-xl font-bold flex items-center gap-2">
+                            <Layers className="text-blue-500" /> 逻辑层: B+ 树索引
+                        </h2>
+                        <div className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100">
+                            节点 = 页 (16KB)
+                        </div>
+                        </div>
+                        <div className="flex justify-center overflow-x-auto pb-4">
+                        <TreeNode node={bTreeData} />
+                        </div>
+                    </div>
+
+                    <div className="flex justify-center -my-4 z-0">
+                        <ArrowDown className="text-slate-300 w-10 h-10 animate-bounce" />
+                    </div>
+
+                    {/* 2. 物理层 */}
+                    <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700 text-slate-200">
+                        <div className="flex justify-between items-center mb-6 border-b border-slate-600 pb-2">
+                        <h2 className="text-xl font-bold flex items-center gap-2 text-white">
+                            <HardDrive className="text-green-400" /> 物理层: 表空间与段分配
+                        </h2>
+                        <div className="flex gap-4 text-xs">
+                            <span className="flex items-center gap-1 text-slate-300"><div className="w-3 h-3 bg-purple-200 rounded"></div> 根/内节点段</span>
+                            <span className="flex items-center gap-1 text-slate-300"><div className="w-3 h-3 bg-green-200 rounded"></div> 叶子节点段</span>
+                        </div>
+                        </div>
+
+                        <div className="space-y-8">
+                        
+                        {/* === 第一阶段：32个碎片页 === */}
+                        <div className="relative border-2 border-dashed border-orange-400/50 rounded-lg p-4 bg-orange-900/10">
+                            <div className="absolute -top-3 left-4 bg-orange-600 text-white px-2 text-xs font-bold rounded shadow-sm flex items-center gap-1">
+                            <Box size={12}/> 第一阶段：碎片页 (Fragment Pages)
+                            </div>
+                            <p className="text-[10px] text-orange-300 mb-3 ml-1">
+                            段刚开始只分配单独的页（最多32个）。这些页来自公共的碎片区。
+                            </p>
+                            <div className="flex gap-3 flex-wrap">
+                            {/* INODE Segment (Index) */}
+                            <div className="flex gap-1 items-center bg-purple-900/30 p-2 rounded border border-purple-500/30">
+                                <span className="text-[9px] text-purple-300 mr-1">内节点段:</span>
+                                <PhysicalPageBlock pageId={3} mappedType="ROOT" isFragment={true} />
+                                <PhysicalPageBlock pageId={4} mappedType="INTERNAL" isFragment={true} />
+                                <PhysicalPageBlock pageId={5} mappedType="INTERNAL" isFragment={true} />
+                            </div>
+
+                            {/* Leaf Segment (Data) - Page 35 属于这里 */}
+                            <div className="flex gap-1 items-center bg-green-900/30 p-2 rounded border border-green-500/30">
+                                <span className="text-[9px] text-green-300 mr-1">叶子段:</span>
+                                <PhysicalPageBlock pageId={35} mappedType="LEAF" isFragment={true} />
+                                <div className="text-[8px] text-slate-500 italic">...等待更多插入</div>
+                            </div>
+                            </div>
+                        </div>
+
+                        {/* === 第二阶段：完整区 === */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="border-2 border-green-500 bg-green-900/20 rounded-lg p-3 relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
+                            <div className="absolute -top-3 left-4 bg-green-600 text-white px-2 text-xs font-bold rounded shadow-sm flex items-center gap-1">
+                                <Cuboid size={12}/> 第二阶段：完整的区 (Leaf Segment Extent)
+                            </div>
+                            <div className="text-[10px] text-green-400 mb-2 flex justify-between">
+                                <span>当碎片页用满 32 个后，申请 1MB 完整区</span>
+                            </div>
+                            
+                            <div className="grid grid-cols-8 gap-1">
+                                {[...Array(64)].map((_, i) => {
+                                const pid = i;
+                                let type = extent1Map[pid];
+                                return <PhysicalPageBlock key={i} pageId={pid} mappedType={type} />;
+                                })}
+                            </div>
+                            </div>
+
+                            <div className="border-2 border-slate-600 bg-slate-700/30 rounded-lg p-3 relative opacity-60">
+                            <div className="absolute -top-3 left-4 bg-slate-600 text-white px-2 text-xs font-bold rounded shadow-sm">
+                                预留空闲区 (Free Extent)
+                            </div>
+                            <div className="text-[10px] text-slate-400 mb-2">
+                                <span>备用资源</span>
+                            </div>
+                            <div className="grid grid-cols-8 gap-1">
+                                {[...Array(64)].map((_, i) => (
+                                <PhysicalPageBlock key={i+64} pageId={i+64} mappedType={null} />
+                                ))}
+                            </div>
+                            </div>
+                        </div>
+
+                        </div>
+                    </div>
+
+                    </div>
+
+                    {/* 右侧：信息面板 */}
+                    <div className="w-full lg:w-80 shrink-0 flex flex-col gap-4">
+                    <div className="bg-white p-5 rounded-xl shadow-lg border border-blue-100 sticky top-6">
+                        <h3 className="font-bold text-lg mb-4 flex items-center gap-2 border-b pb-2">
+                        <Box className="text-purple-500" /> 概念详解
+                        </h3>
+                        
+                        <div className="space-y-4 text-sm">
+                        <div className="p-3 bg-slate-50 rounded border border-slate-200">
+                            <h4 className="font-bold text-slate-800 flex items-center gap-2 mb-2">
+                            <Cuboid className="w-4 h-4 text-blue-600" /> 段 (Segment)
+                            </h4>
+                            <div className="text-slate-600 text-xs leading-relaxed space-y-2">
+                            <p>段是逻辑上的大本营，它管理着两类资产：</p>
+                            <ul className="list-decimal list-inside font-bold">
+                                <li className="text-orange-600">32 个碎片页 (Fragment Pages)</li>
+                                <li className="text-green-600">无限个完整的区 (Extents)</li>
+                            </ul>
+                            <p className="text-slate-400 italic border-t pt-1 mt-1">
+                                * 这种“先零存、后整取”的策略是为了防止小表占用过多空间。
+                            </p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                            <span className="w-2 h-2 bg-green-500 rounded-full"></span> 
+                            区 (Extent)
+                            </h4>
+                            <p className="text-slate-500 mt-1 text-xs">
+                            连续的 64 个页 (1MB)。一旦分配给段，就专属于该段。
+                            </p>
+                        </div>
+                        </div>
+
+                        {/* 动态选中信息 */}
+                        <div className={`mt-6 p-3 rounded-lg border transition-all ${selectedInfo ? 'bg-yellow-50 border-yellow-200 opacity-100' : 'bg-slate-50 border-slate-100 opacity-50'}`}>
+                        <div className="text-xs font-bold uppercase text-slate-400 mb-1">
+                            Current Selection
+                        </div>
+                        {selectedInfo ? (
+                            <div>
+                            <div className="font-bold text-slate-800 text-lg">Page {selectedInfo.id}</div>
+                            <div className="text-xs font-bold text-indigo-600 mb-1">{selectedInfo.segmentInfo}</div>
+                            <div className="text-xs font-bold text-blue-500 mb-2 opacity-80">{selectedInfo.type}</div>
+                            <div className="text-sm text-slate-600 leading-relaxed border-t border-yellow-200 pt-2">
+                                {selectedInfo.info}
+                            </div>
+                            </div>
+                        ) : (
+                            <div className="text-sm text-slate-400 italic">
+                            点击左侧节点或方块查看详情...
+                            </div>
+                        )}
+                        </div>
+
+                    </div>
+                    </div>
+
+                </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<InnodbMacroDemo />);
+    </script>
+</body>
+</html>

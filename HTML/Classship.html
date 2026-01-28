@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ 架构师之路：类关系与设计原则全解 (终极版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Highlight.js for beautiful code -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/cpp.min.js"></script>
+    <!-- Marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <style>
+        /* Base Theme */
+        body {
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            background-color: #0f0f10;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        
+        /* Smooth Layout Transitions */
+        .transition-all-300 { transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        
+        /* UML Box Styling - Skeuomorphic Card Look */
+        .uml-class {
+            width: 180px; 
+            background: linear-gradient(145deg, #ffffff, #f0f0f0);
+            border: 1px solid #999;
+            color: #1a1a1a;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.3), 0 6px 6px rgba(0,0,0,0.2);
+            z-index: 10;
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            transform: translateZ(0);
+        }
+        .uml-header {
+            border-bottom: 1px solid #bbb;
+            padding: 10px;
+            font-weight: 800;
+            text-align: center;
+            background: linear-gradient(to bottom, #fffacd, #eee8aa);
+            font-size: 0.95rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #4a3b00;
+        }
+        .uml-body {
+            padding: 12px;
+            font-size: 0.85rem;
+            font-family: 'Consolas', 'Monaco', monospace;
+            min-height: 60px;
+            background-color: #fffff0;
+            color: #333;
+        }
+
+        /* SVG Canvas */
+        #uml-canvas {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 1;
+        }
+
+        /* Custom Scrollbar */
+        .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; border: 1px solid #444; }
+        .custom-scroll::-webkit-scrollbar-track { background: #1a1a1a; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        /* Button States */
+        .btn-nav {
+            border-left: 3px solid transparent;
+            transition: all 0.15s ease-out;
+        }
+        .btn-nav:focus { outline: none; }
+        .btn-active {
+            background-color: #2563eb !important; /* Blue-600 */
+            border-left-color: #60a5fa !important; /* Blue-400 */
+            color: white !important;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+        }
+        /* Search Match Highlight */
+        .search-match { background-color: rgba(255, 255, 0, 0.2); }
+        
+        /* Markdown Content Styling */
+        .markdown-body h3 { font-size: 1.1rem; font-weight: bold; color: #fff; margin-top: 1.5em; margin-bottom: 0.5em; border-bottom: 1px solid #333; padding-bottom: 0.3em; }
+        .markdown-body p { margin-bottom: 1em; color: #d1d5db; text-align: justify; }
+        .markdown-body strong { color: #fbbf24; font-weight: 700; } 
+        .markdown-body em { color: #facc15; font-style: italic; }
+        .markdown-body ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 1em; color: #9ca3af; }
+        .markdown-body li { margin-bottom: 0.4em; }
+        .markdown-body code { background-color: #333; padding: 2px 4px; border-radius: 4px; font-family: monospace; color: #e9d5ff; font-size: 0.9em; }
+        .markdown-body blockquote { border-left: 4px solid #555; padding-left: 1em; color: #888; font-style: italic; }
+        
+        /* Alert Boxes in Content */
+        .alert-box {
+            border-left: 4px solid;
+            padding: 12px 16px;
+            margin: 16px 0;
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 0 4px 4px 0;
+        }
+        .alert-info { border-color: #3b82f6; background-color: rgba(59, 130, 246, 0.1); }
+        .alert-warning { border-color: #f59e0b; background-color: rgba(245, 158, 11, 0.1); }
+        .alert-danger { border-color: #ef4444; background-color: rgba(239, 68, 68, 0.1); }
+
+        /* Animation */
+        @keyframes dash-flow { to { stroke-dashoffset: -20; } }
+        .flow-anim { animation: dash-flow 1s linear infinite; }
+        
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden selection:bg-blue-600 selection:text-white">
+
+    <!-- Header -->
+    <header class="bg-[#18181b] px-6 py-3 border-b border-[#333] shrink-0 flex justify-between items-center shadow-lg z-30">
+        <h1 class="text-xl font-bold text-white flex items-center tracking-wide">
+            <div class="w-8 h-8 rounded bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center mr-3 shadow-lg ring-1 ring-white/10">
+                <i class="fa-solid fa-code text-white text-sm"></i>
+            </div>
+            <span>C++ 架构师之路 <span class="text-gray-500 font-normal text-sm ml-2">| 类关系与设计原则全解</span></span>
+        </h1>
+        <div class="flex items-center gap-6 text-xs font-medium text-gray-400">
+            <div class="flex items-center"><span class="w-2 h-2 rounded-full bg-blue-500 mr-2 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span> 继承/实现</div>
+            <div class="flex items-center"><span class="w-2 h-2 rounded-full bg-green-500 mr-2 shadow-[0_0_8px_rgba(34,197,94,0.8)]"></span> 组合/聚合</div>
+            <div class="flex items-center"><span class="w-2 h-2 rounded-full bg-amber-500 mr-2 shadow-[0_0_8px_rgba(245,158,11,0.8)]"></span> 依赖/关联</div>
+            <div class="flex items-center"><span class="w-2 h-2 rounded-full bg-purple-500 mr-2 shadow-[0_0_8px_rgba(168,85,247,0.8)]"></span> SOLID 原则</div>
+        </div>
+    </header>
+
+    <!-- Main Layout -->
+    <div class="flex-1 flex overflow-hidden">
+        
+        <!-- Sidebar Navigation -->
+        <div class="w-72 bg-[#121212] border-r border-[#333] flex flex-col overflow-hidden shrink-0">
+            
+            <!-- Search Bar -->
+            <div class="p-3 border-b border-[#333] bg-[#121212]">
+                <div class="relative">
+                    <i class="fa-solid fa-search absolute left-3 top-2.5 text-gray-500 text-xs"></i>
+                    <input type="text" id="search-input" placeholder="搜索关系或原则 (Ctrl+K)" 
+                           class="w-full bg-[#1f1f22] border border-[#333] rounded-md py-1.5 pl-8 pr-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder-gray-600">
+                </div>
+            </div>
+
+            <!-- Scrollable Menu -->
+            <div class="flex-1 overflow-y-auto custom-scroll pb-10" id="sidebar-menu">
+                
+                <!-- Section 1 -->
+                <div class="nav-section" data-group="strong">
+                    <div class="sticky top-0 bg-[#121212]/95 backdrop-blur z-10 px-4 py-2 border-b border-[#333] shadow-sm">
+                        <span class="text-[10px] font-extrabold text-blue-400 uppercase tracking-widest">强耦合 (Strong)</span>
+                    </div>
+                    <div class="p-2 space-y-1">
+                        <button onclick="app.load('generalization')" id="btn-generalization" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="inheritance extends 继承 父子">
+                            <i class="fa-solid fa-sitemap w-6 text-gray-500 group-hover:text-blue-400 transition-colors"></i>
+                            <div>
+                                <div class="font-bold">泛化 / 继承</div>
+                                <div class="text-[10px] text-gray-500">Generalization</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('realization')" id="btn-realization" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="interface implements 接口 实现">
+                            <i class="fa-solid fa-file-signature w-6 text-gray-500 group-hover:text-blue-400 transition-colors"></i>
+                            <div>
+                                <div class="font-bold">实现</div>
+                                <div class="text-[10px] text-gray-500">Realization</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('composition')" id="btn-composition" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="part of strong 组合 同生共死">
+                            <i class="fa-solid fa-gem w-6 text-gray-500 group-hover:text-green-400 transition-colors"></i>
+                            <div>
+                                <div class="font-bold">组合</div>
+                                <div class="text-[10px] text-gray-500">Composition</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 2 -->
+                <div class="nav-section" data-group="weak">
+                    <div class="sticky top-0 bg-[#121212]/95 backdrop-blur z-10 px-4 py-2 border-y border-[#333] mt-2 shadow-sm">
+                        <span class="text-[10px] font-extrabold text-amber-500 uppercase tracking-widest">弱耦合 (Weak)</span>
+                    </div>
+                    <div class="p-2 space-y-1">
+                        <button onclick="app.load('aggregation')" id="btn-aggregation" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="has a weak 聚合 集合">
+                            <i class="fa-regular fa-gem w-6 text-gray-500 group-hover:text-green-400 transition-colors"></i>
+                            <div>
+                                <div class="font-bold">聚合</div>
+                                <div class="text-[10px] text-gray-500">Aggregation</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('association_bi')" id="btn-association_bi" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="knows mutual 双向关联">
+                            <i class="fa-solid fa-arrows-left-right w-6 text-gray-500 group-hover:text-amber-400 transition-colors"></i>
+                            <div>
+                                <div class="font-bold">双向关联</div>
+                                <div class="text-[10px] text-gray-500">Bi-Association</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('association')" id="btn-association" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="knows single 单向关联">
+                            <i class="fa-solid fa-arrow-right-long w-6 text-gray-500 group-hover:text-amber-400 transition-colors"></i>
+                            <div>
+                                <div class="font-bold">单向关联</div>
+                                <div class="text-[10px] text-gray-500">Uni-Association</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('dependency')" id="btn-dependency" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="uses param 依赖 临时">
+                            <i class="fa-solid fa-hand-holding-medical w-6 text-gray-500 group-hover:text-red-400 transition-colors"></i>
+                            <div>
+                                <div class="font-bold">依赖</div>
+                                <div class="text-[10px] text-gray-500">Dependency</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 3 -->
+                <div class="nav-section" data-group="solid">
+                    <div class="sticky top-0 bg-[#121212]/95 backdrop-blur z-10 px-4 py-2 border-y border-[#333] mt-2 shadow-sm">
+                        <span class="text-[10px] font-extrabold text-purple-500 uppercase tracking-widest">SOLID 原则</span>
+                    </div>
+                    <div class="p-2 space-y-1">
+                        <button onclick="app.load('srp')" id="btn-srp" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="solid single responsibility 单一职责">
+                            <span class="w-6 text-center font-black text-gray-600 group-hover:text-purple-400">S</span>
+                            <div>
+                                <div class="font-bold">单一职责 (SRP)</div>
+                                <div class="text-[10px] text-gray-500">Single Responsibility</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('ocp')" id="btn-ocp" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="solid open closed 开闭原则">
+                            <span class="w-6 text-center font-black text-gray-600 group-hover:text-purple-400">O</span>
+                            <div>
+                                <div class="font-bold">开闭原则 (OCP)</div>
+                                <div class="text-[10px] text-gray-500">Open/Closed</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('lsp')" id="btn-lsp" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="solid liskov substitution 里氏替换">
+                            <span class="w-6 text-center font-black text-gray-600 group-hover:text-purple-400">L</span>
+                            <div>
+                                <div class="font-bold">里氏替换 (LSP)</div>
+                                <div class="text-[10px] text-gray-500">Liskov Substitution</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('isp')" id="btn-isp" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="solid interface segregation 接口隔离">
+                            <span class="w-6 text-center font-black text-gray-600 group-hover:text-purple-400">I</span>
+                            <div>
+                                <div class="font-bold">接口隔离 (ISP)</div>
+                                <div class="text-[10px] text-gray-500">Interface Segregation</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('dip')" id="btn-dip" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="solid dependency inversion 依赖倒置">
+                            <span class="w-6 text-center font-black text-gray-600 group-hover:text-purple-400">D</span>
+                            <div>
+                                <div class="font-bold">依赖倒置 (DIP)</div>
+                                <div class="text-[10px] text-gray-500">Dependency Inversion</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 4 -->
+                <div class="nav-section" data-group="goals">
+                    <div class="sticky top-0 bg-[#121212]/95 backdrop-blur z-10 px-4 py-2 border-y border-[#333] mt-2 shadow-sm">
+                        <span class="text-[10px] font-extrabold text-emerald-500 uppercase tracking-widest">核心目标 (Goals)</span>
+                    </div>
+                    <div class="p-2 space-y-1">
+                        <button onclick="app.load('low_coupling')" id="btn-low_coupling" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="coupling 低耦合">
+                            <i class="fa-solid fa-link-slash w-6 text-gray-500 group-hover:text-emerald-400"></i>
+                            <div>
+                                <div class="font-bold">低耦合</div>
+                                <div class="text-[10px] text-gray-500">Low Coupling</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('high_cohesion')" id="btn-high_cohesion" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="cohesion 高内聚">
+                            <i class="fa-solid fa-cube w-6 text-gray-500 group-hover:text-emerald-400"></i>
+                            <div>
+                                <div class="font-bold">高内聚</div>
+                                <div class="text-[10px] text-gray-500">High Cohesion</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('crp')" id="btn-crp" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="composite reuse 组合复用 优先组合">
+                            <i class="fa-solid fa-layer-group w-6 text-gray-500 group-hover:text-emerald-400"></i>
+                            <div>
+                                <div class="font-bold">组合复用 (CRP)</div>
+                                <div class="text-[10px] text-gray-500">Composition Over Inheritance</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 5: Advanced Rules (New) -->
+                <div class="nav-section" data-group="rules">
+                    <div class="sticky top-0 bg-[#121212]/95 backdrop-blur z-10 px-4 py-2 border-y border-[#333] mt-2 shadow-sm">
+                        <span class="text-[10px] font-extrabold text-teal-500 uppercase tracking-widest">高级法则 (Rules)</span>
+                    </div>
+                    <div class="p-2 space-y-1">
+                        <button onclick="app.load('lod')" id="btn-lod" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="demeter law 迪米特 最少知识">
+                            <i class="fa-solid fa-user-secret w-6 text-gray-500 group-hover:text-teal-400"></i>
+                            <div>
+                                <div class="font-bold">迪米特法则 (LoD)</div>
+                                <div class="text-[10px] text-gray-500">Law of Demeter</div>
+                            </div>
+                        </button>
+                        <button onclick="app.load('tda')" id="btn-tda" class="btn-nav w-full text-left px-3 py-3 rounded text-gray-300 hover:bg-[#1f1f22] text-sm flex items-center group" data-keywords="tell don't ask 别问">
+                            <i class="fa-solid fa-bullhorn w-6 text-gray-500 group-hover:text-teal-400"></i>
+                            <div>
+                                <div class="font-bold">Tell, Don't Ask</div>
+                                <div class="text-[10px] text-gray-500">Command vs Query</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Empty State for Search -->
+                <div id="search-empty" class="hidden text-center py-10 text-gray-600">
+                    <i class="fa-solid fa-filter-circle-xmark text-2xl mb-2"></i>
+                    <div class="text-xs">未找到相关条目</div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Right Content Area -->
+        <div class="flex-1 flex flex-col min-w-0 bg-[#09090b] relative">
+            
+            <!-- 1. Visual Canvas (Top 40%) -->
+            <div class="h-[40%] relative bg-[#e5e5e5] border-b border-[#333] overflow-hidden flex items-center justify-center shadow-inner group">
+                <!-- Grid -->
+                <div class="absolute inset-0 opacity-15" style="background-image: radial-gradient(#333 1px, transparent 1px); background-size: 24px 24px;"></div>
+
+                <svg id="uml-canvas">
+                    <defs>
+                        <!-- Markers (RefX adjusted for correct positioning) -->
+                        <marker id="marker-gen" markerWidth="14" markerHeight="14" refX="14" refY="7" orient="auto"><path d="M0,0 L14,7 L0,14 Z" fill="white" stroke="#333" stroke-width="1.5" /></marker>
+                        <marker id="marker-arrow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#333" stroke-width="1.5" /></marker>
+                        <!-- Fix: RefX=0 for markers at Start (Diamond) -->
+                        <marker id="marker-agg" markerWidth="16" markerHeight="10" refX="0" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M8,0 L16,5 L8,10 L0,5 Z" fill="white" stroke="#333" stroke-width="1.5" /></marker>
+                        <marker id="marker-comp" markerWidth="16" markerHeight="10" refX="0" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M8,0 L16,5 L8,10 L0,5 Z" fill="#333" stroke="#333" stroke-width="1.5" /></marker>
+                        <marker id="marker-none" markerWidth="1" markerHeight="1" refX="0" refY="0" orient="auto"><path d="M0,0" /></marker>
+                    </defs>
+                    <line id="uml-line" x1="0" y1="0" x2="0" y2="0" stroke="#333" stroke-width="2" />
+                </svg>
+
+                <!-- Box B (Left / Derived / Whole) -->
+                <div id="class-b" class="uml-class absolute transition-all-300" style="left: 20%; top: 35%;">
+                    <div class="uml-header flex items-center justify-center gap-2">
+                        <i id="icon-b" class="fa-solid fa-cube text-blue-600"></i>
+                        <span id="name-b">Class B</span>
+                    </div>
+                    <div class="uml-body" id="body-b">+ method()</div>
+                </div>
+
+                <!-- Box A (Right / Base / Part) -->
+                <div id="class-a" class="uml-class absolute transition-all-300" style="right: 20%; top: 35%;">
+                    <div class="uml-header flex items-center justify-center gap-2">
+                        <i id="icon-a" class="fa-solid fa-shapes text-gray-600"></i>
+                        <span id="name-a">Class A</span>
+                    </div>
+                    <div class="uml-body" id="body-a">+ method()</div>
+                </div>
+
+                <!-- Relationship Tag -->
+                <div id="uml-label" class="absolute bg-white/95 backdrop-blur px-3 py-1.5 border border-gray-400 rounded-full text-xs font-bold text-gray-800 z-20 shadow-lg" style="left: 50%; top: 33%; transform: translateX(-50%);">
+                    Relationship
+                </div>
+            </div>
+
+            <!-- 2. Info & Code (Bottom 60%) -->
+            <div class="h-[60%] flex flex-row min-h-0 bg-[#1e1e1e]">
+                
+                <!-- Documentation Panel -->
+                <div class="w-1/2 bg-[#18181b] flex flex-col overflow-y-auto custom-scroll border-r border-[#333]">
+                    <div class="p-8 pb-12">
+                        
+                        <!-- Header -->
+                        <div class="flex items-start gap-4 mb-6">
+                            <div id="title-icon" class="w-12 h-12 rounded-xl bg-blue-600/20 text-blue-500 flex items-center justify-center text-2xl shadow-inner shrink-0">
+                                <i class="fa-solid fa-sitemap"></i>
+                            </div>
+                            <div>
+                                <h2 id="info-title" class="text-2xl font-bold text-white leading-tight mb-1">泛化 / 继承</h2>
+                                <div class="text-sm font-mono text-gray-500" id="info-subtitle">Generalization</div>
+                            </div>
+                        </div>
+
+                        <!-- Analogy (Key Feature) -->
+                        <div class="mb-8 p-5 bg-gradient-to-r from-[#2a2215] to-[#1e1e1e] border-l-4 border-amber-500 rounded-r-lg shadow-lg">
+                            <h3 class="text-xs font-bold text-amber-500 uppercase tracking-wider mb-2 flex items-center">
+                                <i class="fa-solid fa-lightbulb mr-2"></i> 核心比喻 (Analogy)
+                            </h3>
+                            <div id="info-analogy" class="text-amber-100/90 text-sm leading-relaxed italic"></div>
+                        </div>
+
+                        <!-- Strength Bar -->
+                        <div class="mb-8">
+                            <div class="flex justify-between items-end mb-2 px-1">
+                                <span class="text-xs font-bold text-gray-400 uppercase tracking-wider">耦合强度 / Importance</span>
+                                <span id="strength-text" class="text-xs font-bold text-blue-400">100%</span>
+                            </div>
+                            <div class="w-full bg-[#333] h-2 rounded-full overflow-hidden shadow-inner">
+                                <div id="strength-bar" class="bg-blue-500 h-full rounded-full transition-all duration-700 shadow-[0_0_10px_currentColor]" style="width: 100%"></div>
+                            </div>
+                        </div>
+
+                        <!-- Detailed Sections -->
+                        <div class="space-y-8">
+                            
+                            <!-- Definition -->
+                            <div>
+                                <h3 class="text-sm font-bold text-blue-400 uppercase tracking-wider mb-3 border-b border-gray-700 pb-2">定义与原理</h3>
+                                <div id="info-desc" class="text-gray-300 text-sm leading-7 text-justify markdown-body"></div>
+                            </div>
+
+                            <!-- Features List -->
+                            <div class="bg-[#252526] rounded-lg p-5 border border-[#333] shadow-md">
+                                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">关键特征 (Key Features)</h3>
+                                <ul id="list-features" class="space-y-2 text-sm text-gray-300 markdown-body"></ul>
+                            </div>
+
+                            <!-- Usage List -->
+                            <div class="bg-[#252526] rounded-lg p-5 border border-[#333] shadow-md">
+                                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">何时使用 (When to Use)</h3>
+                                <ul id="list-usage" class="space-y-2 text-sm text-gray-300 markdown-body"></ul>
+                            </div>
+
+                            <!-- Pitfalls -->
+                            <div class="alert-box alert-warning shadow-md">
+                                <h3 class="text-xs font-bold text-amber-500 uppercase tracking-wider mb-2">⚠️ 常见误区与风险</h3>
+                                <ul id="list-pitfalls" class="space-y-1 text-sm text-amber-100/80 list-disc pl-4 markdown-body"></ul>
+                            </div>
+
+                            <!-- Related (New) -->
+                            <div class="pt-6 border-t border-[#333]">
+                                <h3 class="text-xs font-bold text-purple-400 uppercase tracking-wider mb-3">相关推荐 (See Also)</h3>
+                                <div id="list-related" class="flex flex-wrap gap-2">
+                                    <!-- Injected badges -->
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Code Panel -->
+                <div class="w-1/2 bg-[#1e1e1e] flex flex-col">
+                    <div class="flex justify-between items-center px-4 py-2 border-b border-[#333] bg-[#252526] shrink-0">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-brands fa-cuttlefish text-blue-500"></i>
+                            <span class="text-xs font-bold text-gray-300">Standard C++ Implementation</span>
+                        </div>
+                        <button onclick="app.copyCode()" class="group flex items-center gap-1.5 text-xs bg-[#333] hover:bg-[#444] text-gray-300 px-3 py-1.5 rounded border border-[#444] transition-all active:scale-95">
+                            <i class="fa-regular fa-copy group-hover:text-white"></i>
+                            <span>复制</span>
+                        </button>
+                    </div>
+                    <div class="flex-1 overflow-hidden relative">
+                        <!-- Code container -->
+                        <pre class="m-0 h-full w-full custom-scroll"><code id="code-block" class="language-cpp h-full w-full p-6 text-sm leading-relaxed font-mono"></code></pre>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Massive Content Database ---
+        const db = {
+            // === 1. Generalization ===
+            generalization: {
+                title: "泛化 / 继承",
+                subtitle: "Generalization (Inheritance)",
+                icon: "fa-sitemap", color: "blue",
+                classA: { name: "Animal", body: "virtual eat()", icon: "fa-paw" },
+                classB: { name: "Dog", body: "override eat()", icon: "fa-dog" },
+                uml: { type: "solid", end: "marker-gen", start: "marker-none", label: "Is-a" },
+                strength: 100, strengthLabel: "极强 (编译期绑定)",
+                analogy: "这是 **“父子”** 关系。儿子从出生起就拥有父亲的姓氏（属性）和一些体质特征（方法）。这种关系是天生的、不可选择的，并且儿子在法律上也是一种“父亲家族的人”。",
+                desc: "泛化是面向对象中最紧密的耦合关系之一，表示“Is-a”（是一个）的关系。子类自动拥有父类所有的非私有属性和方法。在 C++ 中，**虚函数表 (vtable)** 机制使得子类可以重写父类的行为，从而实现运行时多态（Polymorphism）。这意味着你可以在不知道具体对象类型的情况下，通过父类指针操作所有子类对象。",
+                features: [
+                    "**Is-a 关系**：子类必须能够替换父类使用（符合 LSP）。",
+                    "**代码复用**：子类继承父类实现，避免重复代码。",
+                    "**动态多态**：通过 `virtual` 关键字和 vtable 实现动态绑定。",
+                    "**高耦合**：父类的修改（Fragile Base Class）会波及所有子类。"
+                ],
+                usage: [
+                    "当两个类存在明显的层级关系时（如：`Dog` 是 `Animal`）。",
+                    "需要使用虚函数实现运行时多态时。",
+                    "构建应用框架的核心层级结构时（如 Qt 的 `QObject` 体系）。"
+                ],
+                pitfalls: [
+                    "**滥用继承**：仅仅为了复用代码而继承（应优先考虑组合）。",
+                    "**菱形继承**：C++ 中多重继承导致的二义性问题（需用 `virtual` 继承）。",
+                    "**虚析构函数遗漏**：**这是致命的！** 如果基类析构函数不是 virtual，删除基类指针时不会调用子类析构函数，导致内存泄漏。"
+                ],
+                related: ["realization", "lsp", "composition"],
+                code: `// 基类：定义通用接口和属性\nclass Animal {\npublic:\n    // 1. 虚函数：允许子类重写。编译器会创建 vtable。\n    virtual void eat() { \n        std::cout << "Animal eating generic food." << std::endl; \n    }\n    \n    // 2. 虚析构函数：非常重要！\n    // 确保 delete animalPtr 时，Dog 的析构函数会被调用\n    virtual ~Animal() { \n        std::cout << "Animal destroyed" << std::endl; \n    }\n};\n\n// 派生类：继承自 Animal\nclass Dog : public Animal {\npublic:\n    // 3. 重写 (Override) 父类行为\n    // 'override' 关键字让编译器帮忙检查签名是否正确\n    void eat() override { \n        std::cout << "Dog eating bones." << std::endl; \n    }\n    \n    void bark() {\n        std::cout << "Woof!" << std::endl;\n    }\n};\n\nint main() {\n    // 多态演示\n    std::unique_ptr<Animal> myPet = std::make_unique<Dog>();\n    myPet->eat(); // 运行时调用 Dog::eat()\n    \n    return 0;\n}`
+            },
+
+            // === 2. Realization ===
+            realization: {
+                title: "实现",
+                subtitle: "Realization (Interface)",
+                icon: "fa-file-signature", color: "blue",
+                classA: { name: "IPlayable", body: "play() = 0", icon: "fa-music" },
+                classB: { name: "Guitar", body: "play() {..}", icon: "fa-guitar" },
+                uml: { type: "dashed", end: "marker-gen", start: "marker-none", label: "Implements" },
+                strength: 90, strengthLabel: "强 (契约约束)",
+                analogy: "这是 **“合同与履行”** 的关系。建筑图纸（接口）规定房子必须有门和窗，但不规定用木头做还是铁做。施工队（实现类）签署了合同，就必须把门窗造出来，否则工程无法验收（编译失败）。",
+                desc: "实现关系是类与接口（Interface）之间的关系。在 C++ 中，没有原生的 `interface` 关键字，而是通过**纯虚类 (Pure Abstract Class)** 来模拟。这种关系强调的是“行为的契约”，即“Can-do”关系。接口定义了*做什么*，实现类定义了*怎么做*。",
+                features: [
+                    "**纯虚函数**：接口类只定义函数原型，赋值为 `= 0`。",
+                    "**不能实例化**：抽象类不能创建对象。",
+                    "**多重继承**：C++ 允许实现多个接口（继承多个纯虚类），这比类继承更灵活。"
+                ],
+                usage: [
+                    "定义系统边界或插件标准（如 `IPlugin`）。",
+                    "依赖倒置原则（DIP）的核心：高层模块依赖接口，而非具体实现。",
+                    "不同类型的对象需要响应相同的消息（如 `draw()`）。"
+                ],
+                pitfalls: [
+                    "**接口污染**：在一个接口里塞了太多方法（违反 ISP）。",
+                    "**ABI 兼容性**：在动态库边界修改虚函数表结构会导致二进制不兼容。",
+                    "**数据成员**：接口类尽量不要包含数据成员，保持纯粹的行为定义。"
+                ],
+                related: ["generalization", "dip", "isp"],
+                code: `// 接口 (C++ 中的纯虚类)\nclass IPlayable {\npublic:\n    // 纯虚函数：没有函数体，强制子类实现\n    virtual void play() = 0; \n    \n    // 接口通常需要虚析构函数\n    virtual ~IPlayable() = default;\n};\n\n// 实现类 A\nclass Guitar : public IPlayable {\npublic:\n    void play() override {\n        std::cout << "Strumming guitar strings..." << std::endl;\n    }\n};\n\n// 实现类 B\nclass Piano : public IPlayable {\npublic:\n    void play() override {\n        std::cout << "Pressing piano keys..." << std::endl;\n    }\n};\n\nvoid startConcert(IPlayable& instrument) {\n    // 只需要知道它能 play，不关心是钢琴还是吉他\n    instrument.play();\n}\n\nint main() {\n    Guitar g;\n    Piano p;\n    startConcert(g);\n    startConcert(p);\n    return 0;\n}`
+            },
+
+            // === 3. Composition ===
+            composition: {
+                title: "组合",
+                subtitle: "Composition (Strong Has-a)",
+                icon: "fa-gem", color: "green",
+                classA: { name: "Engine", body: "start()", icon: "fa-gears" },
+                classB: { name: "Car", body: "Engine e", icon: "fa-car" },
+                uml: { type: "solid", end: "marker-none", start: "marker-comp", label: "Part-of (Strong)" },
+                strength: 95, strengthLabel: "很强 (生命周期绑定)",
+                analogy: "这是 **“人与心脏”** 的关系。心脏是人身体的一部分，你不能把心脏单独拿出来活，人如果去世了，心脏的生命也随之结束。它们是**同生共死**的。",
+                desc: "组合是一种最强的“拥有”关系。部分（Part）不能脱离整体（Whole）而独立存在。在 C++ 内存模型中，这通常意味着成员对象**直接存储在父对象内存中**（栈分配），或者父对象持有成员的 **`unique_ptr`**（堆分配），全权负责其销毁。这种紧密的内存布局通常对 CPU 缓存更友好。",
+                features: [
+                    "**强所有权**：整体全权负责部分的创建和销毁。",
+                    "**生命周期一致**：整体亡，部分亡。",
+                    "**不可共享**：这个部分属于且仅属于这个整体。",
+                    "**值语义**：通常表现为成员对象而非裸指针。"
+                ],
+                usage: [
+                    "严格的“部分-整体”关系（如 窗口与按钮、汽车与引擎）。",
+                    "RAII（资源获取即初始化）模式的核心。",
+                    "优先于继承使用（组合优于继承原则）。"
+                ],
+                pitfalls: [
+                    "**过度耦合**：如果部分需要被外部单独访问或共享，就不应该用组合。",
+                    "**深拷贝成本**：复制整体时，部分也会被复制，可能带来性能开销（需实现移动语义）。"
+                ],
+                related: ["aggregation", "association", "generalization"],
+                code: `class Engine {\npublic:\n    void start() { std::cout << "Engine V8 roaring!" << std::endl; }\n};\n\nclass Car {\nprivate:\n    // 组合关系体现：\n    // 1. 直接成员对象 (内存连续，缓存友好)\n    Engine engine; \n    \n    // 2. 或者使用独占智能指针 (延迟加载)\n    // std::unique_ptr<Engine> enginePtr;\n\npublic:\n    Car() {\n        std::cout << "Car assembled (Engine inserted)." << std::endl;\n    }\n    \n    void drive() {\n        engine.start(); // 委托调用\n        std::cout << "Car is moving." << std::endl;\n    }\n    // Car 析构时，engine 也会自动析构\n};\n\nint main() {\n    {\n        Car myCar;\n        myCar.drive();\n    } // myCar 离开作用域，Engine 随之销毁\n    return 0;\n}`
+            },
+
+            // === 4. Aggregation ===
+            aggregation: {
+                title: "聚合",
+                subtitle: "Aggregation (Weak Has-a)",
+                icon: "fa-regular fa-gem", color: "green",
+                classA: { name: "Student", body: "learn()", icon: "fa-user-graduate" },
+                classB: { name: "School", body: "vector<Std*>", icon: "fa-school" },
+                uml: { type: "solid", end: "marker-none", start: "marker-agg", label: "Has-a (Weak)" },
+                strength: 60, strengthLabel: "中强 (可分离)",
+                analogy: "这是 **“停车场与汽车”** 的关系。停车场（整体）里停着很多汽车（部分）。但是，停车场倒闭了，汽车可以开走去别的地方。汽车的生命周期并不依赖于停车场。",
+                desc: "聚合是一种弱的“拥有”关系。虽然整体拥有部分，但部分可以脱离整体而单独存在。在 C++ 中，这通常表现为持有对象的指针（**`raw pointer`** 或 **`shared_ptr`**）或引用。整体不负责部分的销毁，或者部分的所有权是共享的。",
+                features: [
+                    "**弱所有权**：整体引用部分，但不一定负责销毁。",
+                    "**生命周期独立**：部分可以活得比整体更久。",
+                    "**可共享**：一个部分可以同时属于多个整体（如一个学生属于多个社团）。"
+                ],
+                usage: [
+                    "集合类容器（如班级包含学生，部门包含员工）。",
+                    "观察者模式（Subject 持有 Observer 的列表）。",
+                    "当对象需要被多个拥有者共享时。"
+                ],
+                pitfalls: [
+                    "**悬空指针**：如果部分先被销毁了，整体持有的裸指针就会失效（需用 `weak_ptr` 或逻辑保证）。",
+                    "**内存管理混乱**：谁负责 `delete`？推荐使用智能指针明确所有权。"
+                ],
+                related: ["composition", "association", "association_bi"],
+                code: `class Student {\npublic:\n    std::string name;\n    Student(std::string n) : name(n) {}\n};\n\nclass School {\nprivate:\n    // 聚合关系：\n    // 使用指针容器，不拥有 Student 对象本身\n    // 学生是在外部创建的\n    std::vector<Student*> students;\n\npublic:\n    // 外部传入现有的 Student\n    void enroll(Student* s) {\n        students.push_back(s);\n    }\n\n    void listStudents() {\n        for (auto s : students) {\n            std::cout << s->name << " is in school." << std::endl;\n        }\n    }\n    // School 析构时，不会 delete students 里的指针\n    // 因为 School 并不拥有学生\n};\n\nint main() {\n    Student* alice = new Student("Alice"); // 学生创建\n    {\n        School hogwarts;\n        hogwarts.enroll(alice);\n        hogwarts.listStudents();\n    } // 学校倒闭了\n    \n    // Alice 依然存在\n    std::cout << alice->name << " is still alive!" << std::endl;\n    delete alice; // 需要外部自行清理\n    return 0;\n}`
+            },
+
+            // === 5. Association ===
+            association: {
+                title: "关联 (单向)",
+                subtitle: "Association (Knows-a)",
+                icon: "fa-arrow-right-long", color: "amber",
+                classA: { name: "IDCard", body: "number", icon: "fa-id-card" },
+                classB: { name: "Person", body: "IDCard* card", icon: "fa-user" },
+                uml: { type: "solid", end: "marker-arrow", start: "marker-none", label: "Has Reference" },
+                strength: 40, strengthLabel: "中等 (长期引用)",
+                analogy: "这是 **“你与你的驾照”** 的关系。你拥有驾照，你知道驾照的所有信息，但驾照只是一张卡片，它不知道“你”是谁。这是一种单向的认知。",
+                desc: "关联表示类与类之间的一种长期连接。一个对象持有另一个对象的引用，以便调用其服务。它比依赖关系更强（因为是长期的成员变量），但比聚合更弱（没有明显的整体-部分之分，通常是平级关系）。",
+                features: [
+                    "**长期性**：引用通常保存在成员变量中。",
+                    "**平级关系**：没有明显的包含与被包含关系。",
+                    "**单向性**：A 可以找到 B，但 B 找不到 A。"
+                ],
+                usage: [
+                    "大多数业务对象之间的交互（如 订单关联客户，用户关联配置）。",
+                    "构建对象图网。"
+                ],
+                pitfalls: [
+                    "**所有权模糊**：如果只看 `A* ptr`，很难分清这是聚合还是关联，代码可读性需靠注释补充。"
+                ],
+                related: ["association_bi", "dependency", "aggregation"],
+                code: `class IDCard {\npublic:\n    std::string number;\n    IDCard(std::string n) : number(n) {}\n};\n\nclass Person {\nprivate:\n    // 关联关系：Person 知道 IDCard\n    // 只是引用，不代表包含\n    IDCard* myCard;\n\npublic:\n    // 初始化建立关联\n    Person(IDCard* card) : myCard(card) {}\n\n    void showIdentity() {\n        if (myCard) {\n            std::cout << "My ID is: " << myCard->number << std::endl;\n        }\n    }\n};`
+            },
+
+            // === 6. Bi-Association ===
+            association_bi: {
+                title: "双向关联",
+                subtitle: "Bi-directional Association",
+                icon: "fa-arrows-left-right", color: "amber",
+                classA: { name: "Course", body: "vector<Std*>", icon: "fa-book" },
+                classB: { name: "Student", body: "vector<Crs*>", icon: "fa-user" },
+                uml: { type: "solid", end: "marker-none", start: "marker-none", label: "Mutually Knows" },
+                strength: 50, strengthLabel: "中强 (循环依赖)",
+                analogy: "这是 **“微信好友”** 关系。你的通讯录里有他，他的通讯录里也有你。你们可以互相发消息。这是一种对等的双向关系。",
+                desc: "双方都持有对方的引用。这在 C++ 中实现起来比较麻烦，因为需要处理编译时的**循环依赖**问题（A include B, B include A）。解决方案通常是使用**前向声明 (Forward Declaration)**。",
+                features: [
+                    "**互相可见**：A 能调用 B，B 也能调用 A。",
+                    "**维护成本高**：建立关系时需要同时更新两端（如 `addStudent` 时也要调用 `addCourse`，需防止无限递归）。"
+                ],
+                usage: [
+                    "多对多数据模型（如 学生-课程，作者-书籍）。",
+                    "网状结构图（Graph Nodes）。"
+                ],
+                pitfalls: [
+                    "**编译地狱**：必须使用前向声明，头文件包含顺序复杂。",
+                    "**无限递归**：如果 `A.print()` 调用 `B.print()`，而 `B.print()` 又调用 `A.print()`，会栈溢出。",
+                    "**内存泄漏**：如果使用 `shared_ptr` 互相引用，会形成循环引用，引用计数永远不为0。**必须一方使用 `weak_ptr`**。"
+                ],
+                related: ["association", "aggregation"],
+                code: `// 1. 前向声明 (Forward Declaration)\nclass Course; \n\nclass Student {\n    std::string name;\n    // 使用指针，因为 Course 尚未完全定义\n    std::vector<Course*> courses; \npublic:\n    Student(std::string n) : name(n) {}\n    void addCourse(Course* c); // 实现放在后面\n};\n\nclass Course {\n    std::string title;\n    std::vector<Student*> students;\npublic:\n    Course(std::string t) : title(t) {}\n    \n    void addStudent(Student* s) {\n        students.push_back(s);\n        // 注意：这里需要小心不要无限递归调用 s->addCourse(this)\n    }\n};\n\n// 2. 在类定义之后实现方法\nvoid Student::addCourse(Course* c) {\n    courses.push_back(c);\n}`
+            },
+
+            // === 7. Dependency ===
+            dependency: {
+                title: "依赖",
+                subtitle: "Dependency (Uses-a)",
+                icon: "fa-hand-holding-medical", color: "red",
+                classA: { name: "Logger", body: "log()", icon: "fa-file-lines" },
+                classB: { name: "User", body: "login(Logger)", icon: "fa-user" },
+                uml: { type: "dashed", end: "marker-arrow", start: "marker-none", label: "Uses-a", anim: true },
+                strength: 10, strengthLabel: "最弱 (临时使用)",
+                analogy: "这是 **“借笔写字”** 的关系。你要签字，向旁边的人借了一支笔，签完名就把笔还回去了。你并没有买下这支笔，这支笔也不属于你，你只是在签字这个动作发生时**临时**用了一下它。",
+                desc: "依赖是类与类之间最弱的关系。它表示一个类在某个方法中使用了另一个类（作为**函数参数**、**局部变量**、**静态方法调用**）。这种关系随着方法的执行结束而结束。与关联不同，类 A 不会把类 B 作为成员变量长期持有。",
+                features: [
+                    "**临时性**：不持有引用，用完即走。",
+                    "**无状态**：类 A 通常不记录类 B 的状态。",
+                    "**低耦合**：这是我们在解耦时最希望达到的状态（相比于关联）。"
+                ],
+                usage: [
+                    "工具类调用（`Math::max`, `Logger::log`）。",
+                    "工厂模式创建对象。",
+                    "作为函数参数传递配置或上下文。"
+                ],
+                pitfalls: [
+                    "**隐式依赖**：如果在函数内部偷偷 `new` 一个对象或者调用全局单例，会导致依赖难以被发现和测试（建议通过参数显式传递，即依赖注入）。"
+                ],
+                related: ["association", "dip"],
+                code: `class Logger {\npublic:\n    void log(const std::string& msg) {\n        std::cout << "[LOG]: " << msg << std::endl;\n    }\n};\n\nclass User {\npublic:\n    // 依赖关系体现在函数参数中\n    // User 类内部没有 Logger 成员变量\n    void login(const std::string& username, Logger& logger) {\n        // ... 登录逻辑 ...\n        \n        // 临时使用 logger\n        logger.log("User " + username + " logged in.");\n    }\n};\n\nint main() {\n    Logger sysLogger;\n    User u;\n    \n    // 只有在调用这一刻，User 和 Logger 才产生联系\n    u.login("admin", sysLogger);\n    \n    return 0;\n}`
+            },
+
+            // === SOLID: SRP ===
+            srp: {
+                title: "单一职责原则 (SRP)",
+                subtitle: "Single Responsibility Principle",
+                icon: "fa-user-check", color: "purple",
+                classA: { name: "ReportSaver", body: "save()", icon: "fa-floppy-disk" },
+                classB: { name: "Report", body: "data", icon: "fa-file-lines" },
+                uml: { type: "dashed", end: "marker-arrow", start: "marker-none", label: "Delegate", anim: true },
+                strength: 100, strengthLabel: "核心设计原则",
+                analogy: "就像 **“瑞士军刀 vs 手术刀”**。瑞士军刀什么都能做，但如果你要做精细的手术，你绝对希望医生拿的是专门的手术刀，而不是用瑞士军刀上的剪刀。专业的工具只做一件事，并且做到极致。",
+                desc: "**“一个类应该只有一个引起它变化的原因。”** 如果一个类既负责计算报表，又负责打印报表，那么“计算逻辑变更”和“打印格式变更”都会导致这个类被修改。这违反了 SRP，增加了出错的风险。",
+                features: [
+                    "**高内聚**：类内部的功能高度相关。",
+                    "**低耦合**：将不同维度的职责分离到不同类。",
+                    "**易维护**：修改一个功能不会意外破坏另一个功能。"
+                ],
+                usage: [
+                    "重构“上帝类”（God Class）。",
+                    "分离数据（Model）与表现（View）。",
+                    "当一个类变得太大，或者包含了很多不相关的 include 时。"
+                ],
+                pitfalls: [
+                    "**拆分过细**：如果把每个函数都变成一个类，会导致类爆炸，反而增加系统复杂性（Anemic Domain Model）。"
+                ],
+                related: ["high_cohesion", "isp"],
+                code: `// --- 违反 SRP 的设计 --- \nclass BadReport {\npublic:\n    void calculateData() { /*...*/ }\n    void saveToDB() { /*...*/ }      // 职责混杂：持久化\n    void printHTML() { /*...*/ }     // 职责混杂：展示\n};\n\n// --- 符合 SRP 的设计 --- \n\n// 1. 专注数据计算\nclass ReportData {\n    std::string data;\npublic:\n    void calculate() { data = "Sales: 100"; }\n    std::string getData() const { return data; }\n};\n\n// 2. 专注持久化\nclass ReportRepository {\npublic:\n    void save(const ReportData& r) { \n        std::cout << "Saving " << r.getData() << " to DB.\n"; \n    }\n};\n\n// 3. 专注展示\nclass ReportPrinter {\npublic:\n    void printHTML(const ReportData& r) {\n        std::cout << "<html>" << r.getData() << "</html>\n";\n    }\n};`
+            },
+
+            // === SOLID: OCP ===
+            ocp: {
+                title: "开闭原则 (OCP)",
+                subtitle: "Open/Closed Principle",
+                icon: "fa-box-open", color: "purple",
+                classA: { name: "Shape", body: "draw()=0", icon: "fa-shapes" },
+                classB: { name: "Circle", body: "draw()", icon: "fa-circle" },
+                uml: { type: "solid", end: "marker-gen", start: "marker-none", label: "Extends" },
+                strength: 95, strengthLabel: "扩展性核心",
+                analogy: "就像 **“穿衣服”**。天气变冷了（需求变更），你会穿上一件外套（扩展功能），而不是去医院通过手术把皮肤增厚（修改核心代码）。你的身体（核心系统）对“修改”是关闭的，但对“穿衣”是开放的。",
+                desc: "**“软件实体应对扩展开放，对修改关闭。”** 当需求变更时，我们应该通过添加新代码（如新子类）来实现，而不是去修改那些已经测试过的老代码。这通常通过**多态**和**接口**来实现。",
+                features: [
+                    "**稳定性**：老代码不动，就不会引入新 Bug。",
+                    "**灵活性**：通过插件式架构轻松增加新功能。",
+                    "**可维护性**：新功能代码与老功能代码物理分离。"
+                ],
+                usage: [
+                    "策略模式 (Strategy Pattern)。",
+                    "支付系统（支持支付宝、微信，未来可能支持比特币，不应修改支付核心类）。",
+                    "图形绘制系统。"
+                ],
+                pitfalls: [
+                    "**过度抽象**：为了 OCP 而在不需要扩展的地方到处定义接口，导致代码晦涩难懂（YAGNI 原则）。"
+                ],
+                related: ["generalization", "realization", "dip"],
+                code: `// 抽象基类 (对修改关闭)\nclass Shape {\npublic:\n    virtual void draw() = 0; // 抽象接口\n    virtual ~Shape() = default;\n};\n\n// 扩展 1：圆形\nclass Circle : public Shape {\npublic:\n    void draw() override { std::cout << "O" << std::endl; }\n};\n\n// 扩展 2：方形 (新增功能，不需要修改 Shape 或 Circle)\nclass Square : public Shape {\npublic:\n    void draw() override { std::cout << "[]" << std::endl; }\n};\n\n// 业务逻辑\n// 如果未来要加 Triangle，只需要新建一个类，\n// 这个 drawShapes 函数完全不需要修改！\nvoid drawShapes(const std::vector<Shape*>& shapes) {\n    for (auto s : shapes) {\n        s->draw();\n    }\n}`
+            },
+
+            // === SOLID: LSP ===
+            lsp: {
+                title: "里氏替换原则 (LSP)",
+                subtitle: "Liskov Substitution Principle",
+                icon: "fa-crow", color: "purple",
+                classA: { name: "Bird", body: "fly()", icon: "fa-dove" },
+                classB: { name: "Ostrich", body: "throw!", icon: "fa-feather" },
+                uml: { type: "solid", end: "marker-gen", start: "marker-none", label: "Inherits (Bad)" },
+                strength: 90, strengthLabel: "继承规范",
+                analogy: "就像 **“玩具鸭子”**。如果一个父类是“鸭子”，具有“游泳”和“呱呱叫”的行为。如果你派生了一个“电动玩具鸭”，但它没电池就不能叫。那么在需要真鸭子的地方，你不能用玩具鸭子替换（行为不一致）。如果替换了，程序就会崩。",
+                desc: "**“子类必须能够替换掉它们的父类。”** 这意味着子类不能改变父类预期的行为契约。不仅仅是语法上能编译通过，语义上也要一致。最经典的反例是“正方形是长方形”，在数学上成立，但在编程中，设置长方形的长宽会独立变化，而正方形则会联动，子类破坏了父类的假设。",
+                features: [
+                    "**行为一致性**：子类不应该抛出父类不抛出的异常。",
+                    "**契约遵守**：前置条件不能更强，后置条件不能更弱。",
+                    "**不变性维护**：子类必须保持父类的所有不变性（Invariants）。"
+                ],
+                usage: [
+                    "设计继承层级时的自检标准。",
+                    "避免代码中出现 `if (typeid(obj) == typeid(SubClass))` 这种类型判断代码。"
+                ],
+                pitfalls: [
+                    "**强制继承**：为了复用代码而继承，却屏蔽了父类的方法（如 `throw NotImplemented`），这是典型的 LSP 违规。"
+                ],
+                related: ["generalization", "ocp"],
+                code: `// --- 违反 LSP 的例子 ---\nclass Bird {\npublic:\n    virtual void fly() { /*...*/ }\n};\n\nclass Ostrich : public Bird {\npublic:\n    // 鸵鸟是鸟，但不能飞。\n    // 如果客户端拿到 Bird* 调用 fly()，程序会崩。\n    void fly() override {\n        throw std::runtime_error("I can't fly!"); \n    }\n};\n\n// --- 更好的设计 ---\n// 将“飞”这个行为提取为独立接口\nclass Bird { /*...*/ };\n\nclass IFlyable {\npublic:\n    virtual void fly() = 0;\n};\n\nclass Sparrow : public Bird, public IFlyable {\npublic:\n    void fly() override { /*...*/ }\n};\n\nclass Ostrich : public Bird {\n    // 鸵鸟只继承鸟，不实现 IFlyable\n    // 这样编译器会阻止调用 fly()\n};`
+            },
+
+            // === SOLID: ISP ===
+            isp: {
+                title: "接口隔离原则 (ISP)",
+                subtitle: "Interface Segregation Principle",
+                icon: "fa-scissors", color: "purple",
+                classA: { name: "Worker", body: "work()", icon: "fa-briefcase" },
+                classB: { name: "IWork", body: "work()", icon: "fa-puzzle-piece" },
+                uml: { type: "dashed", end: "marker-gen", start: "marker-none", label: "Specifc" },
+                strength: 80, strengthLabel: "接口瘦身",
+                analogy: "就像 **“手机APP权限”**。一个手电筒APP不应该要求获取你的通讯录、位置和麦克风权限。它应该只要求“闪光灯”权限。接口也是一样，不要给客户端它们不需要的函数。",
+                desc: "**“不应强迫客户端依赖它们不用的方法。”** 应该将胖接口（Fat Interface）拆分为多个特定的小接口。这避免了因为修改接口的一个不相关方法而导致所有实现类都要重编译。C++ 中通过多重继承接口来实现 ISP。",
+                features: [
+                    "**小而美**：接口功能单一。",
+                    "**定制化**：为不同的客户端提供不同的接口视图。",
+                    "**减少重编译**：接口变动影响范围变小。"
+                ],
+                usage: [
+                    "当一个类被多个完全不同的模块使用时。",
+                    "重构那些包含几十个方法的巨型接口。"
+                ],
+                pitfalls: [
+                    "**碎片化**：接口拆得太细，导致类要继承十几个小接口，增加了管理成本。"
+                ],
+                related: ["realization", "srp"],
+                code: `// --- 违反 ISP ---\nstruct ISuperWorker {\n    virtual void work() = 0;\n    virtual void eat() = 0;\n};\n\n// 机器人不需要 eat，但被迫实现一个空函数\nclass Robot : public ISuperWorker {\n    void work() override { /*...*/ }\n    void eat() override { /* Do nothing */ } \n};\n\n// --- 符合 ISP ---\nstruct IWorkable {\n    virtual void work() = 0;\n};\n\nstruct IFeedable {\n    virtual void eat() = 0;\n};\n\n// 人类：既工作又吃\nclass Human : public IWorkable, public IFeedable {\n    void work() override { /*...*/ }\n    void eat() override { /*...*/ }\n};\n\n// 机器人：只工作\nclass RobotClean : public IWorkable {\n    void work() override { /*...*/ }\n};`
+            },
+
+            // === SOLID: DIP ===
+            dip: {
+                title: "依赖倒置原则 (DIP)",
+                subtitle: "Dependency Inversion Principle",
+                icon: "fa-random", color: "purple",
+                classA: { name: "ISwitch", body: "on()", icon: "fa-toggle-off" },
+                classB: { name: "Button", body: "ISwitch*", icon: "fa-hand-pointer" },
+                uml: { type: "dashed", end: "marker-arrow", start: "marker-none", label: "Dep on Abs", anim: true },
+                strength: 100, strengthLabel: "架构基石",
+                analogy: "就像 **“电器与插座”**。台灯（高层模块）并不直接焊死在核电站（底层模块）上。它们都依赖于标准的“三孔插座”（抽象接口）。无论电是核电还是风电，插座不变，台灯就能用。",
+                desc: "**“高层模块不应依赖底层模块，二者都应依赖其抽象；抽象不应依赖细节，细节应依赖抽象。”** 这是解耦的核心。如果不遵循 DIP，底层模块（如数据库驱动）的变动会直接波及高层业务逻辑。在 C++ 中，这通常通过纯虚类和依赖注入（Dependency Injection）来实现。",
+                features: [
+                    "**面向接口编程**：依赖抽象类或接口。",
+                    "**依赖注入 (DI)**：通常配合 DI 容器使用。",
+                    "**可测试性**：可以轻松替换 Mock 对象进行单元测试。"
+                ],
+                usage: [
+                    "业务逻辑层与数据访问层的解耦。",
+                    "替换第三方库时的防腐层设计。",
+                    "单元测试（Mocking）。"
+                ],
+                pitfalls: [
+                    "**抽象泄露**：接口设计得不好，暴露了底层实现细节（如 `ISave` 接口里有个 `connectToMySql` 方法）。"
+                ],
+                related: ["low_coupling", "realization", "ocp"],
+                code: `// --- 抽象层 ---\nclass IDatabase {\npublic:\n    virtual void save(std::string data) = 0;\n    virtual ~IDatabase() = default;\n};\n\n// --- 底层模块 (细节) ---\nclass MySQL : public IDatabase {\npublic:\n    void save(std::string data) override { \n        std::cout << "Saving to MySQL: " << data << std::endl; \n    }\n};\n\nclass MockDB : public IDatabase {\npublic:\n    void save(std::string data) override {\n        std::cout << "Mock save for testing." << std::endl;\n    }\n};\n\n// --- 高层模块 (业务) ---\nclass UserManager {\n    IDatabase* db; // 依赖抽象，而非 MySQL\npublic:\n    // 依赖注入 (Constructor Injection)\n    UserManager(IDatabase* _db) : db(_db) {}\n    \n    void registerUser(std::string name) {\n        // 业务逻辑...\n        db->save(name);\n    }\n};`
+            },
+
+            // === Core Goals: Low Coupling ===
+            low_coupling: {
+                title: "核心目标：低耦合",
+                subtitle: "Low Coupling",
+                icon: "fa-link-slash", color: "emerald",
+                classA: { name: "API", body: "call()", icon: "fa-cloud" },
+                classB: { name: "Client", body: "use(API)", icon: "fa-laptop" },
+                uml: { type: "dashed", end: "marker-arrow", start: "marker-none", label: "Loose", anim: true },
+                strength: 20, strengthLabel: "越低越好",
+                analogy: "就像 **“乐高积木”**。积木之间通过标准的凸点连接，而不是用胶水粘死。你可以轻易拆下一个轮子换上另一个。胶水粘死就是高耦合，标准接口就是低耦合。",
+                desc: "低耦合是指模块之间的依赖程度尽可能低。如果两个模块必须交互，最好通过接口、事件或消息队列，而不是直接调用对方的内部实现。低耦合的系统易于修改、测试和复用。**依赖注入 (DI)** 和 **中介者模式** 是降低耦合的常用手段。",
+                features: ["**易维护**：修改局部不影响全局。", "**易测试**：模块可独立测试。", "**迪米特法则**：只与直接的朋友通信。"],
+                usage: ["所有软件架构设计的终极目标。"],
+                pitfalls: ["**过早优化**：为了解耦而引入过多的中间层，导致系统变得极其复杂且性能下降。"],
+                related: ["dip", "srp"],
+                code: `// 高耦合示例\nclass Lamp { public: void on() {} };\nclass Switch {\n    Lamp lamp; // 直接依赖具体类\npublic:\n    void toggle() { lamp.on(); }\n};\n\n// 低耦合示例\n// 引入抽象层\nclass ISwitchable { public: virtual void on() = 0; };\n\nclass SwitchLoose {\n    ISwitchable* device; // 只依赖抽象\npublic:\n    SwitchLoose(ISwitchable* d) : device(d) {}\n    void toggle() { device->on(); }\n};\n\n// 此时无论接入 Light 还是 Fan，Switch 都不用改`
+            },
+
+            // === Core Goals: High Cohesion ===
+            high_cohesion: {
+                title: "核心目标：高内聚",
+                subtitle: "High Cohesion",
+                icon: "fa-cube", color: "emerald",
+                classA: { name: "Math", body: "calc()", icon: "fa-calculator" },
+                classB: { name: "IO", body: "print()", icon: "fa-print" },
+                uml: { type: "dashed", end: "marker-none", start: "marker-none", label: "Separated" },
+                strength: 90, strengthLabel: "越高越好",
+                analogy: "就像 **“垃圾分类”**。你不会把香蕉皮（湿垃圾）和废旧电池（有害垃圾）扔在一个桶里。高内聚就是把相关的东西放在一起，不相关的东西分开。",
+                desc: "高内聚是指一个模块（类、函数、包）应该专注于完成单一的任务。模块内部的元素应该紧密相关。高内聚通常伴随着低耦合。如果一个类的方法都在操作同一组成员变量，那么这个类就是高内聚的。",
+                features: ["**功能专注**：一个类只做一件事。", "**可读性强**：代码逻辑清晰。", "**自包含**：功能闭环。"],
+                usage: ["模块划分依据。", "避免上帝类 (God Class)。"],
+                pitfalls: ["**内聚过头**：把本该在一起的逻辑硬拆成碎片，导致要在多个文件间跳来跳去才能看懂逻辑。"],
+                related: ["srp", "low_coupling"],
+                code: `// 低内聚：杂货铺\nclass Utils {\npublic:\n    void connectDB();\n    void calculateTax();\n    void sendEmail();\n    void renderUI();\n};\n\n// 高内聚：专卖店\nclass DBConnector { void connect(); };\nclass TaxCalculator { void calc(); };\nclass EmailService { void send(); };`
+            },
+
+            // === Core Goals: CRP ===
+            crp: {
+                title: "组合复用原则 (CRP)",
+                subtitle: "Composite Reuse Principle",
+                icon: "fa-layer-group", color: "emerald",
+                classA: { name: "List", body: "insert(), remove()", icon: "fa-list" },
+                classB: { name: "Stack", body: "List internalList", icon: "fa-layer-group" },
+                uml: { type: "solid", end: "marker-none", start: "marker-comp", label: "Delegates" },
+                strength: 95, strengthLabel: "推荐做法",
+                analogy: "就像 **“组装电脑”**。如果显卡是焊死在主板上的（继承），升级显卡就得换主板。如果显卡是插在插槽上的（组合），你随时可以换一张更强的显卡。组合提供了更大的灵活性。",
+                desc: "**“尽量使用对象组合/聚合，而不是继承来达到复用的目的。”** 继承是一种“白箱复用”，破坏了封装性，且父类变动会影响子类。组合是一种“黑箱复用”，对象只通过接口交互，耦合度更低，且可以在运行时动态改变行为。",
+                features: ["**黑箱复用**：不暴露内部细节。", "**动态性**：运行时可替换组件。", "**封装性好**：整体类通过接口调用部分类。"],
+                usage: ["当没有严格的 Is-a 关系时。", "需要运行时切换算法或行为（策略模式）。", "容器类的实现（如用 Vector 实现 Stack）。"],
+                pitfalls: ["**样板代码**：需要写很多转发方法（Wrapper methods）来调用内部对象。"],
+                related: ["composition", "lsp", "low_coupling"],
+                code: `// --- 违反 CRP (滥用继承) ---\n// Stack 继承 List，意外暴露了 insert(index) 方法\n// 用户可以在栈中间插入元素，破坏了 LIFO 规则\nclass Stack : public std::vector<int> {\npublic:\n    void push(int v) { push_back(v); }\n};\n\n// --- 符合 CRP (使用组合) ---\nclass StackBetter {\nprivate:\n    std::vector<int> data; // 内部细节对外隐藏\npublic:\n    void push(int v) { data.push_back(v); }\n    void pop() { data.pop_back(); }\n    // 只暴露栈应该有的接口\n};`
+            },
+
+            // === Rules: LoD ===
+            lod: {
+                title: "迪米特法则 (LoD)",
+                subtitle: "Law of Demeter (Least Knowledge)",
+                icon: "fa-user-secret", color: "teal",
+                classA: { name: "PaperBoy", body: "pay()", icon: "fa-newspaper" },
+                classB: { name: "Customer", body: "getWallet()", icon: "fa-wallet" },
+                uml: { type: "dashed", end: "marker-arrow", start: "marker-none", label: "Talks to Friend" },
+                strength: 85, strengthLabel: "耦合控制",
+                analogy: "就像 **“买报纸”**。你向报童买报纸时，你会直接给他钱，而不是让他把手伸进你的口袋（Customer），掏出钱包（Wallet），再自己拿钱（Money）。你应该只和你的直接朋友（钱包）说话，让钱包把钱拿出来。",
+                desc: "又称“最少知道原则”。一个对象应该对其他对象有最少的了解。只与直接的朋友通信，不要和陌生人说话。这意味着不要调用由另一个方法返回的对象的内部方法（即避免 `a.getB().getC().doSomething()` 这种链式调用）。",
+                features: ["**隐藏内部结构**：调用者不需要知道对象的内部组成。", "**降低耦合**：修改中间对象的结构不影响调用者。", "**封装性**：强制对象提供业务方法，而不是数据访问器。"],
+                usage: ["消除过长的调用链（Train Wrecks）。", "重构紧密耦合的系统。"],
+                pitfalls: ["**包装器爆炸**：为了符合 LoD，可能会在中间类中创建大量转发方法 (Wrapper Methods)。"],
+                related: ["low_coupling", "tda"],
+                code: `class Wallet { public: float money; };\nclass Person { public: Wallet w; };\n\n// --- 违反 LoD (Train Wreck) ---\nvoid thief(Person& p) {\n    // 伸手进口袋，直接操作钱包内部\n    p.w.money -= 100; \n}\n\n// --- 符合 LoD ---\nclass PersonBetter {\n    Wallet w;\npublic:\n    void pay(float amount) {\n        w.money -= amount; // 自己操作自己的成员\n    }\n};\n\nvoid merchant(PersonBetter& p) {\n    p.pay(100); // 只和 Person 说话\n}`
+            },
+
+            // === Rules: TDA ===
+            tda: {
+                title: "Tell, Don't Ask",
+                subtitle: "Command vs Query",
+                icon: "fa-bullhorn", color: "teal",
+                classA: { name: "Monitor", body: "check()", icon: "fa-desktop" },
+                classB: { name: "User", body: "act()", icon: "fa-user" },
+                uml: { type: "dashed", end: "marker-arrow", start: "marker-none", label: "Command" },
+                strength: 90, strengthLabel: "封装原则",
+                analogy: "就像 **“指挥官与士兵”**。指挥官不会问士兵：“你还有子弹吗？如果有，装填，然后瞄准，然后扣扳机”。指挥官只会下令：“开火！”（Tell）。至于怎么开火，是士兵自己的事。",
+                desc: "不要向对象询问其状态，然后根据状态来替它做决定。相反，应该告诉对象你要做什么，让对象自己根据状态来决定如何行动。这能有效避免逻辑泄露到对象外部，保持高内聚。",
+                features: ["**行为内聚**：数据和操作数据的逻辑在一起。", "**避免微操**：调用者不需要知道被调用者的状态细节。", "**面向对象**：从过程式思维（获取数据->处理）转变为对象思维（发送消息）。"],
+                usage: ["消除散落在各处的 `if (obj.state == ...)` 逻辑。", "状态模式的实现。"],
+                pitfalls: ["**对象变得庞大**：如果不小心，对象可能会承担过多职责（违反 SRP）。"],
+                related: ["high_cohesion", "lod"],
+                code: `class Account {\n    int balance;\npublic:\n    int getBalance() { return balance; }\n    void setBalance(int b) { balance = b; }\n    void withdraw(int amount) {\n        if (amount > balance) throw std::runtime_error("No funds");\n        balance -= amount;\n    }\n};\n\n// --- Ask (Bad) ---\nvoid atm(Account& a) {\n    // 询问数据，替对象做判断\n    if (a.getBalance() >= 100) {\n        a.setBalance(a.getBalance() - 100);\n    }\n}\n\n// --- Tell (Good) ---\nvoid atmBetter(Account& a) {\n    // 直接告诉对象要做什么\n    a.withdraw(100);\n}`
+            }
+        };
+
+        const app = {
+            currentKey: 'generalization',
+            keys: Object.keys(db),
+
+            init: () => {
+                app.load('generalization');
+                window.addEventListener('resize', app.updateLines);
+                
+                // Keyboard Nav
+                document.addEventListener('keydown', (e) => {
+                    if(document.activeElement.tagName === "INPUT") return;
+                    const idx = app.keys.indexOf(app.currentKey);
+                    if (e.key === 'ArrowDown') {
+                        const next = app.keys[(idx + 1) % app.keys.length];
+                        app.load(next);
+                        app.scrollSidebar(next);
+                    } else if (e.key === 'ArrowUp') {
+                        const prev = app.keys[(idx - 1 + app.keys.length) % app.keys.length];
+                        app.load(prev);
+                        app.scrollSidebar(prev);
+                    } else if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        document.getElementById('search-input').focus();
+                    }
+                });
+
+                // Search
+                document.getElementById('search-input').addEventListener('input', (e) => {
+                    const term = e.target.value.toLowerCase();
+                    const btns = document.querySelectorAll('.btn-nav');
+                    let visibleCount = 0;
+                    
+                    btns.forEach(btn => {
+                        const keys = btn.getAttribute('data-keywords').toLowerCase();
+                        if (keys.includes(term)) {
+                            btn.parentElement.style.display = 'block'; // Show parent wrapper (li/div)
+                            btn.style.display = 'flex';
+                            visibleCount++;
+                        } else {
+                            btn.style.display = 'none';
+                        }
+                    });
+
+                    // Hide empty sections
+                    document.querySelectorAll('.nav-section').forEach(sec => {
+                        const visibleChildren = sec.querySelectorAll('.btn-nav[style="display: flex;"]');
+                        sec.style.display = visibleChildren.length > 0 ? 'block' : 'none';
+                    });
+
+                    const emptyMsg = document.getElementById('search-empty');
+                    emptyMsg.style.display = visibleCount === 0 ? 'block' : 'none';
+                });
+            },
+
+            load: (key) => {
+                if(!db[key]) return;
+                app.currentKey = key;
+                const data = db[key];
+                
+                // 1. Sidebar Active State
+                document.querySelectorAll('.btn-nav').forEach(b => {
+                    b.classList.remove('btn-active', 'bg-[#1f1f22]');
+                    b.querySelector('i, span').classList.remove('text-white');
+                    b.querySelector('i, span').classList.add('text-gray-500'); // reset icon color
+                });
+                
+                const activeBtn = document.getElementById(`btn-${key}`);
+                if(activeBtn) {
+                    activeBtn.classList.add('btn-active');
+                    // Highlight icon in active state
+                    const icon = activeBtn.querySelector('i, span.font-black') || activeBtn.querySelector('i');
+                    if(icon) {
+                        icon.classList.remove('text-gray-500');
+                        icon.classList.add('text-white');
+                    }
+                }
+
+                // 2. Render Info Panel
+                document.getElementById('info-title').innerText = data.title;
+                document.getElementById('info-subtitle').innerText = data.subtitle;
+                document.getElementById('title-icon').className = `w-12 h-12 rounded-xl flex items-center justify-center text-2xl shadow-inner shrink-0 bg-${data.color}-500/20 text-${data.color}-500`;
+                document.getElementById('title-icon').innerHTML = data.icon.startsWith('fa') ? `<i class="${data.icon}"></i>` : data.icon; // Support FA class or text
+                
+                document.getElementById('info-analogy').innerHTML = marked.parse(data.analogy);
+                document.getElementById('info-desc').innerHTML = marked.parse(data.desc);
+                document.getElementById('strength-text').innerText = data.strengthLabel;
+                
+                // Strength Bar
+                const strBar = document.getElementById('strength-bar');
+                strBar.style.width = data.strength > 0 ? `${data.strength}%` : '100%';
+                
+                const colorMap = {
+                    blue: 'bg-blue-600', green: 'bg-green-500', amber: 'bg-amber-500', 
+                    red: 'bg-red-500', purple: 'bg-purple-500', emerald: 'bg-emerald-500', teal: 'bg-teal-500'
+                };
+                strBar.className = `h-full rounded-full transition-all duration-700 shadow-[0_0_10px_currentColor] ${colorMap[data.color] || 'bg-blue-500'}`;
+
+                // Lists
+                const fillList = (id, items) => {
+                    const el = document.getElementById(id);
+                    if (!items || items.length === 0) {
+                        el.parentElement.style.display = 'none';
+                    } else {
+                        el.parentElement.style.display = 'block';
+                        el.innerHTML = items.map(i => `<li>${marked.parseInline(i)}</li>`).join('');
+                    }
+                };
+                fillList('list-features', data.features);
+                fillList('list-usage', data.usage);
+                fillList('list-pitfalls', data.pitfalls);
+
+                // Related Topics
+                const relatedContainer = document.getElementById('list-related');
+                relatedContainer.innerHTML = '';
+                if(data.related && data.related.length > 0) {
+                    data.related.forEach(rk => {
+                        const rData = db[rk];
+                        if(!rData) return;
+                        const badge = document.createElement('button');
+                        badge.className = "text-[10px] px-2 py-1 rounded bg-[#333] hover:bg-[#444] text-gray-300 border border-[#444] transition flex items-center gap-1.5";
+                        badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-${rData.color}-500"></span>${rData.title.split(' ')[0]}`;
+                        badge.onclick = () => { app.load(rk); app.scrollSidebar(rk); };
+                        relatedContainer.appendChild(badge);
+                    });
+                }
+
+                // Code
+                const codeBlock = document.getElementById('code-block');
+                codeBlock.textContent = data.code;
+                hljs.highlightElement(codeBlock);
+
+                // 3. Render UML
+                document.getElementById('name-a').innerText = data.classA.name;
+                document.getElementById('body-a').innerText = data.classA.body;
+                document.getElementById('icon-a').className = `${data.classA.icon} text-gray-600`;
+                
+                document.getElementById('name-b').innerText = data.classB.name;
+                document.getElementById('body-b').innerText = data.classB.body;
+                document.getElementById('icon-b').className = `${data.classB.icon} text-${data.color}-500`;
+
+                document.getElementById('uml-label').innerText = data.uml.label;
+                app.updateLines();
+            },
+
+            updateLines: () => {
+                const data = db[app.currentKey].uml;
+                const boxB = document.getElementById('class-b'); 
+                const boxA = document.getElementById('class-a'); 
+                const container = document.getElementById('uml-canvas').getBoundingClientRect();
+                const rB = boxB.getBoundingClientRect();
+                const rA = boxA.getBoundingClientRect();
+
+                // Calculate centered endpoints
+                const x1 = (rB.left - container.left) + rB.width;
+                const y1 = (rB.top - container.top) + rB.height / 2;
+                const x2 = (rA.left - container.left);
+                const y2 = (rA.top - container.top) + rA.height / 2;
+
+                const line = document.getElementById('uml-line');
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+
+                line.setAttribute('stroke-dasharray', data.type === 'dashed' ? "6,6" : "0");
+                line.setAttribute('marker-end', `url(#${data.end})`);
+                line.setAttribute('marker-start', `url(#${data.start})`);
+                
+                if(data.anim) line.classList.add('flow-anim');
+                else line.classList.remove('flow-anim');
+            },
+
+            scrollSidebar: (id) => {
+                const el = document.getElementById(`btn-${id}`);
+                if(el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            },
+
+            copyCode: () => {
+                const code = document.getElementById('code-block').innerText;
+                navigator.clipboard.writeText(code).then(() => {
+                    const btn = document.querySelector('button[onclick="app.copyCode()"]');
+                    const original = btn.innerHTML;
+                    btn.innerHTML = '<i class="fa-solid fa-check text-green-400"></i> <span class="text-green-400">已复制</span>';
+                    btn.classList.add('border-green-500/50');
+                    setTimeout(() => {
+                        btn.innerHTML = original;
+                        btn.classList.remove('border-green-500/50');
+                    }, 2000);
+                });
+            }
+        };
+
+        // Init
+        app.init();
+
+    </script>
+</body>
+</html>

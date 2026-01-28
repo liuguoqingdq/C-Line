@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ 线程池深度交互解析 (ThreadPool Interactive Explorer)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Tailwind Config for Custom Palette -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#fdfbf7', // Warm neutral background
+                        primary: '#334155', // Slate 700
+                        secondary: '#64748b', // Slate 500
+                        accent: '#0ea5e9', // Sky 500 (for threads)
+                        warn: '#f59e0b', // Amber 500 (for queue)
+                        success: '#10b981', // Emerald 500 (for running)
+                        danger: '#ef4444', // Red 500 (for stop)
+                        card: '#ffffff',
+                    },
+                    fontFamily: {
+                        sans: ['Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
+                        mono: ['Consolas', 'Monaco', 'Courier New', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #fdfbf7; color: #1e293b; }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            height: 250px;
+            margin: 0 auto;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .code-line:hover { background-color: #f1f5f9; cursor: pointer; border-left: 3px solid #0ea5e9; }
+        .highlighted-component { box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.3); transform: scale(1.02); transition: all 0.2s; }
+    </style>
+    <!-- Chosen Palette: Warm Neutral Background (#fdfbf7) with Slate text and functional colors (Sky Blue, Amber, Emerald) for UI elements. Minimalistic and professional. -->
+    
+    <!-- Application Structure Plan:
+         1. Header: Title and Brief Definition.
+         2. Simulation Dashboard (The "Wow" Factor): A live visual simulation of the thread pool mechanics.
+            - Visualizes: Tasks entering queue, Workers picking up tasks, Mutex locking.
+            - Interaction: "Add Task" button, "Shutdown" toggle.
+            - Data: Live Chart.js graphs showing Queue Depth and CPU Usage.
+         3. Architecture & Code Map: 
+            - Left: The C++ Source Code (interactive).
+            - Right: A Visual Schema (HTML/CSS blocks) of the class structure.
+            - Interaction: Hovering code highlights the visual component.
+         4. Component Deep Dive: Detailed cards explaining Mutex, Condition Variable, etc., derived from the report.
+         
+         Rationale: This structure moves from concrete behavior (Simulation) to abstract implementation (Code), helping users build a mental model before diving into syntax.
+    -->
+    
+    <!-- Visualization & Content Choices:
+         - Simulation: HTML5 Canvas. Goal: Show the dynamic flow (Producer -> Queue -> Consumer). Interaction: User controls inputs. Justification: Static diagrams don't capture concurrency.
+         - Performance Monitor: Chart.js Line Chart. Goal: Visualize the relationship between task load and worker availability.
+         - Logic Map: HTML/Flexbox diagram. Goal: Show static relationships. Interaction: Highlight on hover. Confirming NO SVG/Mermaid.
+    -->
+    
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+</head>
+<body class="flex flex-col min-h-screen">
+
+    <!-- Header -->
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <span class="text-2xl text-accent">❖</span>
+                <h1 class="text-xl font-bold text-gray-800 tracking-tight">C++ ThreadPool Visualizer</h1>
+            </div>
+            <nav class="hidden md:flex space-x-8">
+                <a href="#simulation" class="text-gray-600 hover:text-accent font-medium">仿真运行 (Simulation)</a>
+                <a href="#code-map" class="text-gray-600 hover:text-accent font-medium">源码映射 (Code Map)</a>
+                <a href="#analysis" class="text-gray-600 hover:text-accent font-medium">核心机制 (Core)</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-12 w-full">
+
+        <!-- Intro Section -->
+        <section class="text-center max-w-3xl mx-auto">
+            <h2 class="text-3xl font-bold text-gray-900 mb-4">深入理解生产者-消费者模型</h2>
+            <p class="text-lg text-gray-600 leading-relaxed">
+                本应用基于提供的 C++11 <code>ThreadPool</code> 源码，将抽象的多线程概念转化为可视化的交互体验。
+                通过下方的仿真器，您可以直观地观察任务如何被提交到 <span class="text-warn font-bold">任务队列</span>，
+                以及 <span class="text-accent font-bold">工作线程</span> 如何通过 <span class="text-secondary font-bold">互斥锁</span> 和 <span class="text-secondary font-bold">条件变量</span> 进行协作。
+            </p>
+        </section>
+
+        <!-- Section 1: Dynamic Simulation -->
+        <section id="simulation" class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div class="p-6 border-b border-gray-100 bg-gray-50 flex flex-col md:flex-row justify-between items-center gap-4">
+                <div>
+                    <h3 class="text-xl font-bold text-gray-800">运行时仿真 (Runtime Simulation)</h3>
+                    <p class="text-sm text-gray-500 mt-1">实时模拟 <code>enqueue()</code> 与工作线程循环。点击按钮提交任务。</p>
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="sim.addTask()" class="px-4 py-2 bg-accent hover:bg-sky-600 text-white rounded-lg shadow transition flex items-center gap-2 font-medium" id="btn-add-task">
+                        <span>+ 提交任务 (Enqueue)</span>
+                    </button>
+                    <button onclick="sim.toggleStop()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg transition font-medium" id="btn-stop">
+                        停止 (Stop)
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
+                <!-- Canvas Area -->
+                <div class="col-span-2 p-6 bg-slate-50 relative">
+                    <canvas id="threadPoolCanvas" class="w-full h-96 rounded-xl border border-gray-200 bg-white shadow-inner"></canvas>
+                    <div class="absolute top-8 left-8 bg-white/90 backdrop-blur p-3 rounded-lg text-xs shadow-sm border border-gray-200">
+                        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-warn"></div> 待处理任务 (In Queue)</div>
+                        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-accent"></div> 空闲线程 (Idle Worker)</div>
+                        <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-success"></div> 工作中 (Busy Worker)</div>
+                    </div>
+                </div>
+
+                <!-- Stats & Charts -->
+                <div class="col-span-1 p-6 flex flex-col gap-6">
+                    <div>
+                        <h4 class="font-semibold text-gray-700 mb-2">系统状态监控</h4>
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div class="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                                <div class="text-xs text-blue-600 uppercase font-bold tracking-wider">Queue Size</div>
+                                <div class="text-2xl font-bold text-blue-800" id="stat-queue">0</div>
+                            </div>
+                            <div class="bg-green-50 p-3 rounded-lg border border-green-100">
+                                <div class="text-xs text-green-600 uppercase font-bold tracking-wider">Active Workers</div>
+                                <div class="text-2xl font-bold text-green-800" id="stat-active">0/4</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex-grow">
+                        <h4 class="font-semibold text-gray-700 mb-2">负载趋势 (Load Trend)</h4>
+                        <div class="chart-container">
+                            <canvas id="statsChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 2: Code & Architecture Map -->
+        <section id="code-map">
+            <div class="mb-6">
+                <h3 class="text-2xl font-bold text-gray-800">源码结构映射 (Code-Architecture Mapping)</h3>
+                <p class="text-gray-600 mt-2">
+                    鼠标悬停在左侧代码行上，右侧对应的架构组件将高亮显示。这有助于理解每一行代码在整体架构中的物理位置和作用。
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                <!-- Code Block -->
+                <div class="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 flex flex-col h-[600px]">
+                    <div class="bg-gray-900 px-4 py-2 border-b border-gray-700 flex justify-between items-center">
+                        <span class="text-gray-400 text-sm font-mono">ThreadPool.h</span>
+                        <div class="flex gap-1.5">
+                            <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                            <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                            <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                        </div>
+                    </div>
+                    <div class="overflow-auto p-4 font-mono text-sm text-gray-300 leading-6" id="code-viewer">
+                        <!-- Code content injected via JS for interactivity -->
+                    </div>
+                </div>
+
+                <!-- Visual Architecture (HTML/CSS) -->
+                <div class="bg-white rounded-xl shadow-lg border border-gray-200 p-8 flex flex-col items-center justify-center relative overflow-hidden" id="arch-diagram">
+                    <!-- Thread Pool Container -->
+                    <div class="border-4 border-dashed border-gray-300 rounded-3xl p-8 w-full max-w-lg relative bg-slate-50 transition-all duration-300" id="comp-pool">
+                        <div class="absolute -top-4 left-6 bg-slate-50 px-2 text-gray-400 font-bold uppercase text-sm tracking-widest">ThreadPool Instance</div>
+                        
+                        <!-- Queue Block -->
+                        <div class="mb-8 border-2 border-amber-200 bg-amber-50 rounded-lg p-4 transition-all duration-300" id="comp-queue">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="font-bold text-amber-800">Task Queue</span>
+                                <span class="text-xs bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full">std::queue</span>
+                            </div>
+                            <div class="flex gap-2 overflow-x-auto pb-2">
+                                <div class="w-8 h-8 bg-amber-300 rounded shadow-sm flex-shrink-0"></div>
+                                <div class="w-8 h-8 bg-amber-300 rounded shadow-sm flex-shrink-0"></div>
+                                <div class="w-8 h-8 bg-amber-100 rounded border border-amber-200 border-dashed flex-shrink-0"></div>
+                            </div>
+                        </div>
+
+                        <!-- Synchronization Block -->
+                        <div class="mb-8 flex justify-center gap-6">
+                            <div class="border-2 border-purple-200 bg-purple-50 rounded-lg p-3 w-32 text-center transition-all duration-300" id="comp-mutex">
+                                <div class="text-2xl mb-1">🔒</div>
+                                <div class="font-bold text-purple-800 text-sm">Mutex</div>
+                                <div class="text-xs text-purple-600">std::mutex</div>
+                            </div>
+                            <div class="border-2 border-indigo-200 bg-indigo-50 rounded-lg p-3 w-32 text-center transition-all duration-300" id="comp-cv">
+                                <div class="text-2xl mb-1">🔔</div>
+                                <div class="font-bold text-indigo-800 text-sm">Cond Var</div>
+                                <div class="text-xs text-indigo-600">notify/wait</div>
+                            </div>
+                        </div>
+
+                        <!-- Workers Block -->
+                        <div class="border-2 border-emerald-200 bg-emerald-50 rounded-lg p-4 transition-all duration-300" id="comp-workers">
+                            <div class="flex justify-between items-center mb-4">
+                                <span class="font-bold text-emerald-800">Worker Threads</span>
+                                <span class="text-xs bg-emerald-200 text-emerald-800 px-2 py-0.5 rounded-full">std::vector&lt;thread&gt;</span>
+                            </div>
+                            <div class="grid grid-cols-4 gap-2">
+                                <div class="h-12 bg-white border border-emerald-300 rounded shadow-sm flex items-center justify-center text-emerald-600 text-lg">⚙️</div>
+                                <div class="h-12 bg-white border border-emerald-300 rounded shadow-sm flex items-center justify-center text-emerald-600 text-lg">⚙️</div>
+                                <div class="h-12 bg-white border border-emerald-300 rounded shadow-sm flex items-center justify-center text-emerald-600 text-lg">⚙️</div>
+                                <div class="h-12 bg-white border border-emerald-300 rounded shadow-sm flex items-center justify-center text-emerald-600 text-lg">⚙️</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 3: Detailed Component Analysis -->
+        <section id="analysis" class="pb-12">
+             <div class="mb-6">
+                <h3 class="text-2xl font-bold text-gray-800">核心组件解析 (Core Components)</h3>
+                <p class="text-gray-600 mt-2">
+                   基于源报告分析的关键技术点。
+                </p>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Card 1: Task Storage -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 text-xl">📂</div>
+                        <h4 class="font-bold text-lg text-gray-800">A. 任务仓库 (Tasks)</h4>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4 leading-relaxed">
+                        这是 <code>std::queue</code> 类型的 FIFO 队列。关键点在于它使用了 <code>std::function&lt;void()&gt;</code> 
+                        作为通用包装器，消除了不同函数签名的差异，使任何任务都能被统一存储。
+                    </p>
+                    <div class="bg-gray-50 p-2 rounded text-xs font-mono text-gray-700 border border-gray-200">
+                        std::queue&lt;std::function&lt;void()&gt;&gt; tasks;
+                    </div>
+                </div>
+
+                <!-- Card 2: Workers -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 text-xl">👷</div>
+                        <h4 class="font-bold text-lg text-gray-800">B. 工人团队 (Workers)</h4>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4 leading-relaxed">
+                        在构造函数中初始化的线程组。每个线程都在执行一个死循环：抢锁 -> 检查队列 -> (若空)休眠 -> (若有)取任务 -> 执行。
+                        这种机制避免了频繁创建销毁线程的开销。
+                    </p>
+                    <div class="bg-gray-50 p-2 rounded text-xs font-mono text-gray-700 border border-gray-200">
+                        std::vector&lt;std::thread&gt; workers;
+                    </div>
+                </div>
+
+                <!-- Card 3: Synchronization -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-xl">🚦</div>
+                        <h4 class="font-bold text-lg text-gray-800">C. 调度与信号 (Sync)</h4>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4 leading-relaxed">
+                        <code>mutex</code> 保护队列不被并发破坏。<code>condition_variable</code> 实现高效等待机制：
+                        "没有任务就睡觉，有任务就起床"，避免了 CPU 空转（忙等待）。
+                    </p>
+                    <div class="bg-gray-50 p-2 rounded text-xs font-mono text-gray-700 border border-gray-200">
+                        condition.wait(lock, ...);
+                    </div>
+                </div>
+
+                 <!-- Card 4: Enqueue -->
+                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-xl">📨</div>
+                        <h4 class="font-bold text-lg text-gray-800">D. 任务提交 (Enqueue)</h4>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4 leading-relaxed">
+                        这是生产者的入口。利用 <code>template</code> 和 <code>future</code>，允许提交带返回值的任务。
+                        任务入队后，立即调用 <code>notify_one</code> 唤醒一个沉睡的线程。
+                    </p>
+                    <div class="bg-gray-50 p-2 rounded text-xs font-mono text-gray-700 border border-gray-200">
+                        enqueue(F&& f, Args&&... args)
+                    </div>
+                </div>
+
+                <!-- Card 5: Stop Mechanism -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 text-xl">🛑</div>
+                        <h4 class="font-bold text-lg text-gray-800">E. 优雅退出 (Stop)</h4>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4 leading-relaxed">
+                        析构函数中设置 <code>stop=true</code> 并 <code>notify_all</code>。
+                        线程醒来发现停止信号且队列为空，才会退出循环。这确保了所有已提交任务都被执行完毕。
+                    </p>
+                    <div class="bg-gray-50 p-2 rounded text-xs font-mono text-gray-700 border border-gray-200">
+                        ~ThreadPool() { ... join(); }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="bg-white border-t border-gray-200 py-8 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 text-center text-gray-500 text-sm">
+            <p>Generated based on Source Report: ThreadPool.h & Analysis | No SVG/Mermaid Used.</p>
+        </div>
+    </footer>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // --- 1. Data & State Management ---
+        const appState = {
+            workers: 4,
+            queue: [],
+            workerStatus: [0, 0, 0, 0], // 0: Idle, 1: Busy
+            stopped: false,
+            stats: {
+                queueHistory: Array(20).fill(0),
+                activeHistory: Array(20).fill(0),
+                labels: Array(20).fill('')
+            }
+        };
+
+        // --- 2. Chart.js Initialization ---
+        const ctx = document.getElementById('statsChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: appState.stats.labels,
+                datasets: [
+                    {
+                        label: 'Queue Size (Pending)',
+                        data: appState.stats.queueHistory,
+                        borderColor: '#f59e0b', // Amber
+                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Busy Workers',
+                        data: appState.stats.activeHistory,
+                        borderColor: '#10b981', // Emerald
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 0 },
+                plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    y: { beginAtZero: true, max: 10, ticks: { stepSize: 1 } },
+                    x: { display: false }
+                }
+            }
+        });
+
+        // --- 3. Simulation Logic (Canvas) ---
+        const canvas = document.getElementById('threadPoolCanvas');
+        const c = canvas.getContext('2d');
+        
+        // Canvas resizing
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Visual Entities
+        class VisualTask {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.targetX = x;
+                this.targetY = y;
+                this.speed = 5;
+                this.state = 'spawning'; // spawning, queuing, moving_to_worker, processing, done
+                this.color = '#f59e0b';
+                this.progress = 0;
+            }
+
+            update() {
+                // Movement logic
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist > this.speed) {
+                    this.x += (dx / dist) * this.speed;
+                    this.y += (dy / dist) * this.speed;
+                } else {
+                    this.x = this.targetX;
+                    this.y = this.targetY;
+                }
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 8, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+
+                if (this.state === 'processing') {
+                    // Draw progress ring
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 12, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * this.progress));
+                    ctx.strokeStyle = '#10b981';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
+        }
+
+        const tasks = []; // Active visual tasks
+
+        // Simulation Controller
+        const sim = {
+            lastUpdate: 0,
+            
+            addTask: function() {
+                if (appState.stopped) return;
+                
+                // Add to logical queue
+                appState.queue.push({ id: Date.now() });
+                
+                // Add visual task (start at left side)
+                const t = new VisualTask(20, canvas.height / 2);
+                t.state = 'queuing';
+                tasks.push(t);
+                
+                this.updateQueuePositions();
+                this.tryAssignTask();
+                this.updateStatsDisplay();
+            },
+
+            toggleStop: function() {
+                appState.stopped = !appState.stopped;
+                const btn = document.getElementById('btn-stop');
+                const addBtn = document.getElementById('btn-add-task');
+                
+                if (appState.stopped) {
+                    btn.textContent = "重启 (Restart)";
+                    btn.className = "px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition font-medium";
+                    addBtn.disabled = true;
+                    addBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                } else {
+                    btn.textContent = "停止 (Stop)";
+                    btn.className = "px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg transition font-medium";
+                    addBtn.disabled = false;
+                    addBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            },
+
+            updateQueuePositions: function() {
+                // Align tasks in the "Queue" area (center-left)
+                const queueStartX = 100;
+                const queueY = canvas.height / 2;
+                
+                // Filter tasks that are waiting
+                const waitingTasks = tasks.filter(t => t.state === 'queuing');
+                
+                waitingTasks.forEach((t, index) => {
+                    t.targetX = queueStartX + (index * 20);
+                    t.targetY = queueY;
+                });
+            },
+
+            tryAssignTask: function() {
+                // Find idle worker
+                const idleWorkerIndex = appState.workerStatus.findIndex(s => s === 0);
+                
+                if (idleWorkerIndex !== -1 && appState.queue.length > 0) {
+                    // Logic: Pop task
+                    appState.queue.shift();
+                    appState.workerStatus[idleWorkerIndex] = 1; // Mark busy
+                    
+                    // Visual: Move first queuing task to worker
+                    const vTask = tasks.find(t => t.state === 'queuing');
+                    if (vTask) {
+                        vTask.state = 'moving_to_worker';
+                        vTask.workerIndex = idleWorkerIndex;
+                        
+                        // Calculate worker position
+                        const workerX = canvas.width - 100;
+                        const workerSpacing = canvas.height / (appState.workers + 1);
+                        const workerY = workerSpacing * (idleWorkerIndex + 1);
+                        
+                        vTask.targetX = workerX;
+                        vTask.targetY = workerY;
+                        
+                        // Simulate processing time
+                        setTimeout(() => {
+                            vTask.state = 'processing';
+                            vTask.color = '#10b981'; // Green
+                            
+                            // Finish task after random delay
+                            const duration = 1000 + Math.random() * 2000;
+                            const startTime = Date.now();
+                            
+                            const processInterval = setInterval(() => {
+                                const elapsed = Date.now() - startTime;
+                                vTask.progress = elapsed / duration;
+                                if (elapsed >= duration) {
+                                    clearInterval(processInterval);
+                                    // Task Done
+                                    appState.workerStatus[idleWorkerIndex] = 0; // Free worker
+                                    vTask.state = 'done';
+                                    
+                                    // Remove task from visual array eventually
+                                    const idx = tasks.indexOf(vTask);
+                                    if(idx > -1) tasks.splice(idx, 1);
+                                    
+                                    // Try assign next
+                                    sim.tryAssignTask();
+                                    sim.updateQueuePositions();
+                                    sim.updateStatsDisplay();
+                                }
+                            }, 50);
+                            
+                        }, 600); // Travel time
+                    }
+                }
+                this.updateStatsDisplay();
+            },
+
+            updateStatsDisplay: function() {
+                document.getElementById('stat-queue').innerText = appState.queue.length;
+                const active = appState.workerStatus.filter(s => s === 1).length;
+                document.getElementById('stat-active').innerText = `${active}/${appState.workers}`;
+            },
+            
+            loop: function() {
+                // Clear Canvas
+                c.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // 1. Draw Static Structure
+                // Queue Area
+                c.fillStyle = 'rgba(245, 158, 11, 0.1)';
+                c.strokeStyle = '#fcd34d';
+                c.lineWidth = 2;
+                c.beginPath();
+                c.roundRect(80, canvas.height/2 - 30, 200, 60, 10);
+                c.stroke();
+                c.fill();
+                c.fillStyle = '#b45309';
+                c.font = '12px sans-serif';
+                c.fillText('Queue (Mutex Protected)', 80, canvas.height/2 - 40);
+
+                // Workers Area
+                const workerX = canvas.width - 100;
+                const workerSpacing = canvas.height / (appState.workers + 1);
+                
+                for(let i=0; i<appState.workers; i++) {
+                    const y = workerSpacing * (i + 1);
+                    const isBusy = appState.workerStatus[i] === 1;
+                    
+                    // Connection line
+                    c.beginPath();
+                    c.moveTo(280, canvas.height/2); // From queue end
+                    c.lineTo(workerX, y);
+                    c.strokeStyle = isBusy ? '#cbd5e1' : '#e2e8f0';
+                    c.lineWidth = 1;
+                    c.stroke();
+
+                    // Worker Box
+                    c.fillStyle = isBusy ? '#ecfdf5' : '#f8fafc';
+                    c.strokeStyle = isBusy ? '#10b981' : '#94a3b8';
+                    c.lineWidth = isBusy ? 2 : 1;
+                    c.beginPath();
+                    c.arc(workerX, y, 20, 0, Math.PI*2);
+                    c.fill();
+                    c.stroke();
+                    
+                    // Icon
+                    c.fillStyle = isBusy ? '#047857' : '#64748b';
+                    c.font = '16px sans-serif';
+                    c.textAlign = 'center';
+                    c.textBaseline = 'middle';
+                    c.fillText(isBusy ? '⚙️' : '💤', workerX, y);
+                    
+                    // Label
+                    c.fillStyle = '#64748b';
+                    c.font = '10px sans-serif';
+                    c.fillText(`Thread ${i+1}`, workerX, y + 35);
+                }
+
+                // 2. Draw Tasks
+                tasks.forEach(t => {
+                    t.update();
+                    t.draw(c);
+                });
+
+                requestAnimationFrame(sim.loop);
+            }
+        };
+        
+        // Start Sim
+        sim.loop();
+        
+        // Chart Updater Loop
+        setInterval(() => {
+            const active = appState.workerStatus.filter(s => s === 1).length;
+            
+            appState.stats.queueHistory.shift();
+            appState.stats.queueHistory.push(appState.queue.length);
+            
+            appState.stats.activeHistory.shift();
+            appState.stats.activeHistory.push(active);
+            
+            chart.update();
+        }, 1000);
+
+
+        // --- 4. Code Map Logic ---
+        const codeLines = [
+            { line: 1, text: "class ThreadPool {", comp: "comp-pool" },
+            { line: 2, text: "public:", comp: "comp-pool" },
+            { line: 3, text: "    explicit ThreadPool(size_t threads) : stop(false) {", comp: "comp-workers" },
+            { line: 4, text: "        for(size_t i = 0; i < threads; ++i)", comp: "comp-workers" },
+            { line: 5, text: "            workers.emplace_back(", comp: "comp-workers" },
+            { line: 6, text: "                [this] {", comp: "comp-workers" },
+            { line: 7, text: "                    for(;;) {", comp: "comp-workers" },
+            { line: 8, text: "                        std::function<void()> task;", comp: "comp-queue" },
+            { line: 9, text: "                        {", comp: "comp-mutex" },
+            { line: 10, text: "                            std::unique_lock<std::mutex> lock(this->queue_mutex);", comp: "comp-mutex" },
+            { line: 11, text: "                            this->condition.wait(lock,", comp: "comp-cv" },
+            { line: 12, text: "                                [this]{ return this->stop || !this->tasks.empty(); });", comp: "comp-cv" },
+            { line: 13, text: "                            if(this->stop && this->tasks.empty()) return;", comp: "comp-workers" },
+            { line: 14, text: "                            task = std::move(this->tasks.front());", comp: "comp-queue" },
+            { line: 15, text: "                            this->tasks.pop();", comp: "comp-queue" },
+            { line: 16, text: "                        }", comp: "comp-mutex" },
+            { line: 17, text: "                        task();", comp: "comp-workers" },
+            { line: 18, text: "                    }", comp: "comp-workers" },
+            { line: 19, text: "                }", comp: "comp-workers" },
+            { line: 20, text: "            );", comp: "comp-workers" },
+            { line: 21, text: "    }", comp: "comp-pool" },
+            { line: 22, text: "", comp: "" },
+            { line: 23, text: "    template<class F, class... Args>", comp: "comp-queue" },
+            { line: 24, text: "    auto enqueue(F&& f, Args&&... args) -> std::future<...> {", comp: "comp-queue" },
+            { line: 25, text: "        // ... (Package task)", comp: "comp-queue" },
+            { line: 26, text: "        {", comp: "comp-mutex" },
+            { line: 27, text: "            std::unique_lock<std::mutex> lock(queue_mutex);", comp: "comp-mutex" },
+            { line: 28, text: "            tasks.emplace([task](){ (*task)(); });", comp: "comp-queue" },
+            { line: 29, text: "        }", comp: "comp-mutex" },
+            { line: 30, text: "        condition.notify_one();", comp: "comp-cv" },
+            { line: 31, text: "        return res;", comp: "comp-queue" },
+            { line: 32, text: "    }", comp: "comp-pool" },
+            { line: 33, text: "", comp: "" },
+            { line: 34, text: "private:", comp: "comp-pool" },
+            { line: 35, text: "    std::vector<std::thread> workers;", comp: "comp-workers" },
+            { line: 36, text: "    std::queue<std::function<void()>> tasks;", comp: "comp-queue" },
+            { line: 37, text: "    std::mutex queue_mutex;", comp: "comp-mutex" },
+            { line: 38, text: "    std::condition_variable condition;", comp: "comp-cv" },
+            { line: 39, text: "    bool stop;", comp: "comp-pool" },
+            { line: 40, text: "};", comp: "comp-pool" },
+        ];
+
+        const codeViewer = document.getElementById('code-viewer');
+        
+        codeLines.forEach((item, index) => {
+            const div = document.createElement('div');
+            div.className = 'code-line px-2 py-0.5 text-gray-300 transition-colors whitespace-pre font-mono';
+            div.textContent = item.text;
+            
+            if (item.comp) {
+                div.addEventListener('mouseenter', () => {
+                    // Highlight Code
+                    div.style.backgroundColor = '#1e293b';
+                    div.style.color = '#fff';
+                    // Highlight Diagram
+                    const el = document.getElementById(item.comp);
+                    if (el) el.classList.add('highlighted-component', 'bg-white', 'ring-2', 'ring-offset-2', 'ring-sky-500');
+                });
+                
+                div.addEventListener('mouseleave', () => {
+                    // Reset Code
+                    div.style.backgroundColor = '';
+                    div.style.color = '#d1d5db';
+                    // Reset Diagram
+                    const el = document.getElementById(item.comp);
+                    if (el) el.classList.remove('highlighted-component', 'bg-white', 'ring-2', 'ring-offset-2', 'ring-sky-500');
+                });
+            }
+            codeViewer.appendChild(div);
+        });
+
+    </script>
+</body>
+</html>

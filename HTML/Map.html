@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ STL std::map (Key-Value RB-Tree) 可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8fafc;
+        }
+        .canvas-container {
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        /* 节点平滑过渡动画 */
+        .node-group {
+            transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .node-circle {
+            transition: fill 0.3s ease, stroke 0.3s ease, stroke-width 0.3s ease;
+        }
+        
+        /* 代码高亮样式 */
+        .keyword { color: #c678dd; }
+        .type { color: #e5c07b; }
+        .function { color: #61afef; }
+        .number { color: #d19a66; }
+        .string { color: #98c379; }
+        .comment { color: #9ca3af; font-style: italic; }
+        .macro { color: #e06c75; }
+
+        /* 禁用状态 */
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            filter: grayscale(100%);
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden text-slate-800">
+
+    <!-- 顶部导航 -->
+    <header class="bg-slate-900 text-white p-3 shadow-md shrink-0 z-20">
+        <div class="flex flex-col xl:flex-row justify-between items-center gap-4">
+            <div>
+                <h1 class="text-lg font-bold flex items-center gap-2">
+                    <span class="bg-indigo-600 px-2 py-0.5 rounded text-sm font-mono">std::map</span> 
+                    Key-Value 映射 (Red-Black Tree)
+                </h1>
+                <p class="text-xs text-slate-400" id="statusText">
+                    Ready. 键值对存储，按 Key 排序。
+                </p>
+            </div>
+            
+            <div class="flex gap-2 bg-slate-800 p-1.5 rounded-lg border border-slate-700 items-center shadow-lg">
+                <!-- 输入区 -->
+                <div class="flex flex-col gap-1 mr-2">
+                    <input type="number" id="keyInput" placeholder="Key (Int)" class="px-2 py-0.5 rounded text-slate-900 w-24 text-xs outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                    <input type="text" id="valInput" placeholder="Val (Str)" class="px-2 py-0.5 rounded text-slate-900 w-24 text-xs outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                </div>
+
+                <!-- 按钮区 -->
+                <div class="grid grid-cols-2 gap-1">
+                    <button id="btnInsert" onclick="visualizer.insert()" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs font-bold transition">m.insert()</button>
+                    <button id="btnAssign" onclick="visualizer.assign()" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1 rounded text-xs font-bold transition" title="m[key] = val">m[k] = v</button>
+                    <button id="btnFind" onclick="visualizer.find()" class="bg-yellow-600 hover:bg-yellow-500 px-3 py-1 rounded text-xs font-bold transition text-black">m.find()</button>
+                    <button id="btnErase" onclick="visualizer.erase()" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded text-xs font-bold transition">m.erase()</button>
+                </div>
+                <button id="btnClear" onclick="visualizer.clear()" class="h-full bg-slate-600 hover:bg-slate-500 px-2 rounded text-xs font-bold transition ml-1">Clear</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主布局 -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden">
+        
+        <!-- 左侧：红黑树逻辑视图 -->
+        <section class="flex-1 flex flex-col relative bg-white">
+            <div class="absolute top-3 left-3 bg-white/95 p-3 rounded-lg shadow-lg border border-slate-200 text-sm z-10 backdrop-blur-sm pointer-events-none">
+                <div class="font-bold text-slate-800 mb-1 border-b border-slate-100 pb-1">逻辑视图 (Logical View)</div>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div class="text-slate-500">Size:</div>
+                    <div id="setSize" class="font-mono font-bold text-indigo-600">0</div>
+                    <div class="text-slate-500">Value Type:</div>
+                    <div class="font-mono text-xs text-slate-700">pair&lt;const K, V&gt;</div>
+                </div>
+                <div class="mt-2 flex items-center gap-3 text-xs border-t border-slate-100 pt-2">
+                    <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-slate-900 border border-slate-600"></span> Black</div>
+                    <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-red-500 border border-red-300"></span> Red</div>
+                </div>
+            </div>
+
+            <!-- SVG 画布 -->
+            <div class="canvas-container w-full h-full overflow-auto relative cursor-grab active:cursor-grabbing" id="treeContainer">
+                <svg id="treeSvg" width="100%" height="100%" class="block min-w-[600px] min-h-[400px]"></svg>
+            </div>
+        </section>
+
+        <!-- 右侧：内存与代码 -->
+        <section class="w-full md:w-[500px] flex flex-col border-l border-slate-200 bg-slate-50 shadow-xl z-10">
+            
+            <!-- 栈区 -->
+            <div class="p-3 border-b border-slate-200 bg-white">
+                <div class="flex justify-between items-center mb-1">
+                    <h2 class="font-bold text-xs text-slate-600 uppercase tracking-wider">Stack Memory</h2>
+                    <span class="text-[10px] font-mono text-slate-400">High Address</span>
+                </div>
+                <div class="bg-slate-100 rounded border border-slate-200 p-2 font-mono text-xs shadow-inner">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-indigo-700 font-bold">std::map&lt;int, string&gt; m</span>
+                        <span class="text-slate-400">@0x7FFF...A0</span>
+                    </div>
+                    <div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[10px]">
+                        <span class="text-slate-500">_M_header (root*)</span>
+                        <span id="stackRootPtr" class="bg-white px-1 border rounded text-purple-600">nullptr</span>
+                        <span class="text-slate-500">_M_node_count</span>
+                        <span id="stackSizeVal" class="text-slate-700 font-bold">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 堆区 -->
+            <div class="flex-1 flex flex-col overflow-hidden bg-slate-50">
+                <div class="p-3 pb-1 flex justify-between items-center">
+                    <h2 class="font-bold text-xs text-slate-600 uppercase tracking-wider">Heap Memory (Nodes)</h2>
+                    <span class="text-[10px] font-mono text-slate-400">Low Address</span>
+                </div>
+                
+                <div class="flex-1 overflow-auto px-3 pb-3">
+                    <div class="bg-white rounded border border-slate-200 shadow-sm overflow-hidden min-w-[450px]">
+                        <table class="w-full text-[10px] text-left table-fixed">
+                            <thead class="bg-slate-100 text-slate-600 border-b border-slate-200 font-semibold">
+                                <tr>
+                                    <th class="p-1.5 w-14 text-center">Addr</th>
+                                    <th class="p-1.5 w-6 text-center">C</th>
+                                    <th class="p-1.5 w-8 text-center bg-indigo-50 text-indigo-700">Key</th>
+                                    <th class="p-1.5 w-12 text-center bg-green-50 text-green-700">Value</th>
+                                    <th class="p-1.5 w-10 text-center text-xs text-slate-400">P*</th>
+                                    <th class="p-1.5 w-10 text-center text-xs text-slate-400">L*</th>
+                                    <th class="p-1.5 w-10 text-center text-xs text-slate-400">R*</th>
+                                </tr>
+                            </thead>
+                            <tbody id="memoryTableBody" class="font-mono text-slate-700 divide-y divide-slate-100">
+                                <!-- JS填充 -->
+                            </tbody>
+                        </table>
+                        <div id="emptyMemMsg" class="p-8 text-center text-slate-400 italic text-xs">
+                            Heap is empty.<br>
+                            std::pair&lt;Key, Value&gt; stored in nodes.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 代码控制台 -->
+            <div class="h-48 bg-[#1e1e1e] text-white p-2 font-mono text-[10px] overflow-auto flex flex-col shrink-0 border-t border-slate-600">
+                <div class="text-slate-500 border-b border-slate-700 pb-1 mb-1 sticky top-0 bg-[#1e1e1e] flex justify-between">
+                    <span>Operation Log</span>
+                    <span class="text-xs cursor-pointer hover:text-white" onclick="document.getElementById('consoleOutput').innerHTML=''">[Clear]</span>
+                </div>
+                <div id="consoleOutput" class="flex-1 space-y-1 pb-2"></div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // -----------------------
+        // 常量与辅助
+        // -----------------------
+        const RED = 'RED';
+        const BLACK = 'BLACK';
+        const DELAY_FAST = 400; 
+        const DELAY_SLOW = 800; 
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        class MapNode {
+            constructor(key, value, parent = null) {
+                this.key = key;      // Key (用于排序)
+                this.value = value;  // Value (负载数据)
+                this.color = RED;
+                this.left = null;
+                this.right = null;
+                this.parent = parent;
+                // 模拟堆地址
+                this.address = '0x' + (0x2000 + Math.floor(Math.random() * 0xFFFF) * 8).toString(16).toUpperCase();
+                this.x = 0;
+                this.y = 0;
+            }
+        }
+
+        class MapVisualizer {
+            constructor() {
+                this.root = null;
+                this.size = 0;
+                this.isAnimating = false;
+                
+                this.svg = document.getElementById('treeSvg');
+                this.console = document.getElementById('consoleOutput');
+                this.memBody = document.getElementById('memoryTableBody');
+                this.statusText = document.getElementById('statusText');
+                
+                this.log(`<span class="comment">// std::map&lt;int, string&gt; m; initialized.</span>`);
+                this.render();
+            }
+
+            // --- UI 控制 ---
+            setBusy(busy, msg = "") {
+                this.isAnimating = busy;
+                this.statusText.textContent = busy ? `Executing: ${msg}...` : "Ready.";
+                const buttons = ['btnInsert', 'btnErase', 'btnFind', 'btnClear', 'btnAssign'];
+                buttons.forEach(id => {
+                    document.getElementById(id).disabled = busy;
+                });
+            }
+
+            // --- 核心操作：Insert (标准 map::insert, 不覆盖) ---
+            async insert() {
+                if (this.isAnimating) return;
+                const { key, val } = this.getInput();
+                if (key === null) return;
+
+                this.setBusy(true, `m.insert({${key}, "${val}"})`);
+                this.log(`<span class="keyword">auto</span> ret = m.<span class="function">insert</span>({<span class="number">${key}</span>, <span class="string">"${val}"</span>});`);
+
+                let y = null;
+                let x = this.root;
+                
+                // 1. BST 查找
+                while (x !== null) {
+                    this.render(); 
+                    this.highlightNode(x.key, 'orange');
+                    await sleep(DELAY_FAST);
+
+                    y = x;
+                    if (key === x.key) {
+                        this.log(`&nbsp;&nbsp;<span class="comment">// Key ${key} exists. Insert failed.</span>`);
+                        this.log(`&nbsp;&nbsp;<span class="comment">// Use m[key] = val to update.</span>`);
+                        this.highlightNode(x.key, 'red');
+                        await sleep(DELAY_SLOW);
+                        this.render();
+                        this.setBusy(false);
+                        return;
+                    } else if (key < x.key) {
+                        x = x.left;
+                    } else {
+                        x = x.right;
+                    }
+                }
+
+                // 2. 插入新节点
+                let z = new MapNode(key, val, y);
+                if (y === null) this.root = z;
+                else if (key < y.key) y.left = z;
+                else y.right = z;
+                
+                this.size++;
+                this.log(`&nbsp;&nbsp;<span class="comment">// Created node at ${z.address}.</span>`);
+                this.render();
+                this.highlightNode(z.key, 'green');
+                await sleep(DELAY_SLOW);
+
+                // 3. 红黑树修复
+                this.log(`&nbsp;&nbsp;<span class="comment">// Rebalancing (RB-Tree Fixup)...</span>`);
+                await this.insertFixup(z);
+                
+                this.render();
+                this.setBusy(false);
+            }
+
+            // --- 核心操作：Assign (m[k] = v, 插入或更新) ---
+            async assign() {
+                if (this.isAnimating) return;
+                const { key, val } = this.getInput();
+                if (key === null) return;
+
+                this.setBusy(true, `m[${key}] = "${val}"`);
+                this.log(`m[<span class="number">${key}</span>] = <span class="string">"${val}"</span>;`);
+
+                let y = null;
+                let x = this.root;
+                
+                // 1. 查找
+                while (x !== null) {
+                    this.render(); 
+                    this.highlightNode(x.key, 'orange');
+                    await sleep(DELAY_FAST);
+
+                    if (key === x.key) {
+                        this.log(`&nbsp;&nbsp;<span class="comment">// Key ${key} found. Updating value.</span>`);
+                        x.value = val; // 更新值
+                        this.highlightNode(x.key, 'green');
+                        await sleep(DELAY_SLOW);
+                        this.render();
+                        this.setBusy(false);
+                        return;
+                    }
+                    y = x;
+                    if (key < x.key) x = x.left;
+                    else x = x.right;
+                }
+
+                // 2. 没找到 -> 插入
+                this.log(`&nbsp;&nbsp;<span class="comment">// Key not found. Inserting new pair.</span>`);
+                let z = new MapNode(key, val, y);
+                if (y === null) this.root = z;
+                else if (key < y.key) y.left = z;
+                else y.right = z;
+                
+                this.size++;
+                this.render();
+                this.highlightNode(z.key, 'green');
+                await sleep(DELAY_SLOW);
+
+                // 3. 修复
+                await this.insertFixup(z);
+                this.render();
+                this.setBusy(false);
+            }
+
+            // 红黑树修复 (与 Set 完全一致，只看 Key)
+            async insertFixup(z) {
+                while (z.parent && z.parent.color === RED) {
+                    this.render();
+                    this.highlightNode(z.key, 'red'); 
+                    this.highlightNode(z.parent.key, 'red');
+                    await sleep(DELAY_SLOW);
+
+                    if (z.parent === z.parent.parent.left) {
+                        let y = z.parent.parent.right; 
+                        
+                        if (y && y.color === RED) {
+                            z.parent.color = BLACK;
+                            y.color = BLACK;
+                            z.parent.parent.color = RED;
+                            z = z.parent.parent;
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                        } else {
+                            if (z === z.parent.right) {
+                                z = z.parent;
+                                this.leftRotate(z);
+                                this.render();
+                                await sleep(DELAY_SLOW);
+                            }
+                            z.parent.color = BLACK;
+                            z.parent.parent.color = RED;
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                            this.rightRotate(z.parent.parent);
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                        }
+                    } else {
+                        let y = z.parent.parent.left;
+                        if (y && y.color === RED) {
+                            z.parent.color = BLACK;
+                            y.color = BLACK;
+                            z.parent.parent.color = RED;
+                            z = z.parent.parent;
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                        } else {
+                            if (z === z.parent.left) {
+                                z = z.parent;
+                                this.rightRotate(z);
+                                this.render();
+                                await sleep(DELAY_SLOW);
+                            }
+                            z.parent.color = BLACK;
+                            z.parent.parent.color = RED;
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                            this.leftRotate(z.parent.parent);
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                        }
+                    }
+                }
+                if (this.root.color === RED) {
+                    this.root.color = BLACK;
+                    this.render();
+                }
+            }
+
+            // --- Find ---
+            async find() {
+                if (this.isAnimating) return;
+                const { key } = this.getInput();
+                if (key === null) return;
+
+                this.setBusy(true, "Find " + key);
+                this.log(`<span class="keyword">auto</span> it = m.<span class="function">find</span>(<span class="number">${key}</span>);`);
+
+                let x = this.root;
+                let found = false;
+
+                while (x !== null) {
+                    this.render();
+                    this.highlightNode(x.key, 'orange');
+                    await sleep(DELAY_FAST);
+
+                    if (key === x.key) {
+                        found = true;
+                        this.log(`&nbsp;&nbsp;<span class="comment">// Found: {${x.key}, "${x.value}"} @ ${x.address}</span>`);
+                        this.highlightNode(x.key, 'green'); 
+                        break;
+                    } else if (key < x.key) {
+                        x = x.left;
+                    } else {
+                        x = x.right;
+                    }
+                }
+
+                if (!found) this.log(`&nbsp;&nbsp;<span class="comment">// Not found. Returns m.end()</span>`);
+                this.setBusy(false);
+                setTimeout(() => this.render(), 1500);
+            }
+
+            // --- Erase (Simplified BST Deletion + Recolor) ---
+            async erase() {
+                if (this.isAnimating) return;
+                const { key } = this.getInput();
+                if (key === null) return;
+
+                this.setBusy(true, "Erase " + key);
+                this.log(`m.<span class="function">erase</span>(<span class="number">${key}</span>);`);
+
+                let x = this.root;
+                let foundNode = null;
+                while (x !== null) {
+                    this.render();
+                    this.highlightNode(x.key, 'orange');
+                    await sleep(DELAY_FAST);
+                    
+                    if (key === x.key) {
+                        foundNode = x;
+                        break;
+                    } else if (key < x.key) x = x.left;
+                    else x = x.right;
+                }
+
+                if (!foundNode) {
+                    this.log(`&nbsp;&nbsp;<span class="comment">// Key not found.</span>`);
+                    this.setBusy(false);
+                    this.render();
+                    return;
+                }
+
+                this.highlightNode(foundNode.key, 'red');
+                await sleep(DELAY_SLOW);
+                await this.deleteNodeAsync(foundNode);
+                
+                this.size--;
+                if (this.root) this.root.color = BLACK;
+                this.render();
+                this.log(`&nbsp;&nbsp;<span class="comment">// Node deleted.</span>`);
+                this.setBusy(false);
+            }
+
+            async deleteNodeAsync(node) {
+                if (node.left && node.right) {
+                    let successor = node.right;
+                    while (successor.left) {
+                        this.render();
+                        this.highlightNode(node.key, 'red'); 
+                        this.highlightNode(successor.key, 'orange');
+                        await sleep(DELAY_FAST);
+                        successor = successor.left;
+                    }
+                    this.render();
+                    this.highlightNode(successor.key, 'green');
+                    await sleep(DELAY_SLOW);
+
+                    // Map specific: Swap Key AND Value for the algorithm (logically)
+                    node.key = successor.key;
+                    node.value = successor.value;
+                    await this.deleteNodeAsync(successor);
+                } else {
+                    let child = node.left ? node.left : node.right;
+                    if (node.parent) {
+                        if (node === node.parent.left) node.parent.left = child;
+                        else node.parent.right = child;
+                    } else {
+                        this.root = child;
+                    }
+                    if (child) child.parent = node.parent;
+                }
+            }
+
+            // --- Rotations ---
+            leftRotate(x) {
+                let y = x.right;
+                x.right = y.left;
+                if (y.left) y.left.parent = x;
+                y.parent = x.parent;
+                if (!x.parent) this.root = y;
+                else if (x === x.parent.left) x.parent.left = y;
+                else x.parent.right = y;
+                y.left = x;
+                x.parent = y;
+            }
+
+            rightRotate(x) {
+                let y = x.left;
+                x.left = y.right;
+                if (y.right) y.right.parent = x;
+                y.parent = x.parent;
+                if (!x.parent) this.root = y;
+                else if (x === x.parent.right) x.parent.right = y;
+                else x.parent.left = y;
+                y.right = x;
+                x.parent = y;
+            }
+
+            clear() {
+                if(this.isAnimating) return;
+                this.root = null;
+                this.size = 0;
+                this.log(`m.<span class="function">clear</span>();`);
+                this.render();
+            }
+
+            // --- Render ---
+            render() {
+                document.getElementById('setSize').innerText = this.size;
+                document.getElementById('stackSizeVal').innerText = this.size;
+                
+                const stackRoot = document.getElementById('stackRootPtr');
+                if (this.root) {
+                    stackRoot.innerText = this.root.address;
+                    stackRoot.className = "bg-purple-100 px-1 border border-purple-200 rounded text-purple-700 font-bold";
+                } else {
+                    stackRoot.innerText = "nullptr";
+                    stackRoot.className = "bg-white px-1 border rounded text-slate-400 italic";
+                }
+
+                this.svg.innerHTML = '';
+                this.calculateLayout();
+                this.drawTree(this.root);
+                this.renderMemory();
+            }
+
+            calculateLayout() {
+                if (!this.root) return;
+                const depth = this.getDepth(this.root);
+                const width = Math.max(800, Math.pow(2, depth) * 60);
+                this._traversePos(this.root, width/2, 40, width/4);
+                this.svg.setAttribute('viewBox', `0 0 ${width} ${(depth * 80) + 100}`);
+            }
+
+            _traversePos(node, x, y, offset) {
+                if (!node) return;
+                node.x = x;
+                node.y = y;
+                this._traversePos(node.left, x - offset, y + 80, offset/2);
+                this._traversePos(node.right, x + offset, y + 80, offset/2);
+            }
+
+            getDepth(node) {
+                if (!node) return 0;
+                return 1 + Math.max(this.getDepth(node.left), this.getDepth(node.right));
+            }
+
+            drawTree(node) {
+                if (!node) return;
+                if (node.left) this.drawLine(node, node.left);
+                if (node.right) this.drawLine(node, node.right);
+                this.drawTree(node.left);
+                this.drawTree(node.right);
+
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'node-group');
+                g.setAttribute('id', `node-${node.key}`);
+                
+                // Circle
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('class', 'node-circle');
+                circle.setAttribute('cx', node.x);
+                circle.setAttribute('cy', node.y);
+                circle.setAttribute('r', '22');
+                circle.setAttribute('fill', node.color === RED ? '#ef4444' : '#1e293b');
+                circle.setAttribute('stroke', '#fff');
+                circle.setAttribute('stroke-width', '2');
+                circle.setAttribute('filter', 'drop-shadow(0px 2px 2px rgba(0,0,0,0.3))');
+
+                // Key Text (Central)
+                const keyText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                keyText.setAttribute('x', node.x);
+                keyText.setAttribute('y', node.y);
+                keyText.setAttribute('dy', '0.1em');
+                keyText.setAttribute('text-anchor', 'middle');
+                keyText.setAttribute('fill', 'white');
+                keyText.setAttribute('font-weight', 'bold');
+                keyText.setAttribute('font-size', '14px');
+                keyText.textContent = node.key;
+
+                // Value Text (Below Key inside circle, or just below circle)
+                // Let's put it below the circle for clarity
+                const valBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                const valText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                const valStr = node.value.length > 5 ? node.value.substring(0,4)+".." : node.value;
+                
+                valText.setAttribute('x', node.x);
+                valText.setAttribute('y', node.y + 36);
+                valText.setAttribute('text-anchor', 'middle');
+                valText.setAttribute('fill', '#1e293b');
+                valText.setAttribute('font-size', '10px');
+                valText.setAttribute('font-weight', 'bold');
+                valText.textContent = `"${valStr}"`;
+
+                // Addr Text
+                const addr = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                addr.setAttribute('x', node.x);
+                addr.setAttribute('y', node.y + 48);
+                addr.setAttribute('text-anchor', 'middle');
+                addr.setAttribute('fill', '#64748b');
+                addr.setAttribute('font-size', '9px');
+                addr.setAttribute('font-family', 'monospace');
+                addr.textContent = node.address;
+
+                g.appendChild(circle);
+                g.appendChild(keyText);
+                g.appendChild(valText);
+                g.appendChild(addr);
+                this.svg.appendChild(g);
+            }
+
+            drawLine(n1, n2) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', n1.x);
+                line.setAttribute('y1', n1.y);
+                line.setAttribute('x2', n2.x);
+                line.setAttribute('y2', n2.y);
+                line.setAttribute('stroke', '#cbd5e1');
+                line.setAttribute('stroke-width', '2');
+                this.svg.appendChild(line);
+            }
+
+            renderMemory() {
+                this.memBody.innerHTML = '';
+                const nodes = [];
+                const collect = n => { if(!n) return; collect(n.left); nodes.push(n); collect(n.right); };
+                collect(this.root);
+
+                if (nodes.length === 0) {
+                    document.getElementById('emptyMemMsg').style.display = 'block';
+                    return;
+                }
+                document.getElementById('emptyMemMsg').style.display = 'none';
+
+                nodes.forEach(node => {
+                    const row = document.createElement('tr');
+                    row.className = 'border-b border-slate-50 transition-colors duration-500';
+                    row.id = `mem-${node.key}`;
+                    
+                    const ptr = (n) => n ? n.address : '<span class="text-slate-300">nullptr</span>';
+                    const colorBadge = node.color === RED 
+                        ? `<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1"></span>R`
+                        : `<span class="inline-block w-2 h-2 rounded-full bg-slate-800 mr-1"></span>B`;
+
+                    row.innerHTML = `
+                        <td class="p-1.5 text-purple-600 font-bold text-center">${node.address}</td>
+                        <td class="p-1.5 text-center font-bold">${colorBadge}</td>
+                        <td class="p-1.5 text-center font-bold text-indigo-700 bg-indigo-50/50">${node.key}</td>
+                        <td class="p-1.5 text-center text-green-700 font-mono text-xs bg-green-50/50">"${node.value}"</td>
+                        <td class="p-1.5 text-center text-slate-500 font-mono scale-90">${ptr(node.parent)}</td>
+                        <td class="p-1.5 text-center text-slate-500 font-mono scale-90">${ptr(node.left)}</td>
+                        <td class="p-1.5 text-center text-slate-500 font-mono scale-90">${ptr(node.right)}</td>
+                    `;
+                    this.memBody.appendChild(row);
+                });
+            }
+
+            log(html) {
+                const div = document.createElement('div');
+                div.innerHTML = `> ${html}`;
+                this.console.appendChild(div);
+                this.console.scrollTop = this.console.scrollHeight;
+            }
+
+            getInput() {
+                const kEl = document.getElementById('keyInput');
+                const vEl = document.getElementById('valInput');
+                const key = parseInt(kEl.value);
+                const val = vEl.value || "Val"; // Default string
+                
+                if (isNaN(key)) {
+                    alert("请输入整数 Key");
+                    return { key: null, val: null };
+                }
+                // Clear input only if success? Let's clear to indicate taken
+                // kEl.value = ''; 
+                // vEl.value = '';
+                return { key, val };
+            }
+
+            highlightNode(key, type) {
+                const g = document.getElementById(`node-${key}`);
+                const row = document.getElementById(`mem-${key}`);
+                
+                if (g) {
+                    const circle = g.querySelector('circle');
+                    let color = '#facc15'; // Orange
+                    if (type === 'red') color = '#ef4444';
+                    if (type === 'green') color = '#22c55e';
+                    
+                    circle.setAttribute('stroke', color);
+                    circle.setAttribute('stroke-width', '4');
+                    // Reset
+                    if (type === 'green' || type === 'red') {
+                        setTimeout(() => {
+                            circle.setAttribute('stroke', '#fff');
+                            circle.setAttribute('stroke-width', '2');
+                        }, 1200);
+                    }
+                }
+                if (row) {
+                    row.classList.add('bg-yellow-100');
+                    setTimeout(() => row.classList.remove('bg-yellow-100'), 500);
+                }
+            }
+        }
+
+        const visualizer = new MapVisualizer();
+
+        // 初始演示
+        (async () => {
+            await sleep(800);
+            // 预设值
+            document.getElementById('keyInput').value = 1;
+            document.getElementById('valInput').value = "Apple";
+            await visualizer.insert();
+            
+            document.getElementById('keyInput').value = 5;
+            document.getElementById('valInput').value = "Banana";
+            await visualizer.insert();
+
+            document.getElementById('keyInput').value = 1;
+            document.getElementById('valInput').value = "Ant";
+            visualizer.log(`<br><span class="text-indigo-400 font-bold">Try m.insert(1, "Ant") - It will fail!</span>`);
+            visualizer.log(`<span class="text-indigo-400 font-bold">Try m[1] = "Ant" - It will update!</span>`);
+        })();
+
+    </script>
+</body>
+</html>

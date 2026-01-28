@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoGebra Lite · Advanced</title>
+  <!-- React & ReactDOM -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <!-- Babel for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Math.js for expression parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: 'Segoe UI', sans-serif;
+      background: #f8fafc;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    /* Custom scrollbar for function list */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } = React;
+
+    const COLORS = [
+      '#ef4444', // red
+      '#3b82f6', // blue
+      '#10b981', // green
+      '#f59e0b', // orange
+      '#8b5cf6', // purple
+      '#ec4899', // pink
+      '#06b6d4', // cyan
+    ];
+
+    const PlusIcon = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+    );
+
+    const TrashIcon = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 6h18" />
+        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      </svg>
+    );
+
+    const AlertCircleIcon = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+    );
+
+    const DerivativeIcon = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 19c4-6 6-9 8-9s4 2 8 9" />
+        <circle cx="12" cy="10" r="1" />
+      </svg>
+    );
+
+    const modeOptions = [
+      { value: 'cartesian', label: '直角坐标 y = f(x)', variable: 'x' },
+      { value: 'polar', label: '极坐标 r = f(θ)', variable: 'θ' },
+      { value: 'parametric', label: '参数方程 (x(t), y(t))', variable: 't' },
+    ];
+
+    /**
+     * 数值积分 - Simpson 公式，支持奇异点容错
+     */
+    const calculateSimpsonIntegral = (compiledExpr, a, b, steps = 800, variable = 'x') => {
+      if (!compiledExpr || !isFinite(a) || !isFinite(b) || a === b) return 0;
+      const n = Math.max(2, steps + (steps % 2)); // 需要偶数
+      const h = (b - a) / n;
+      let sum = 0;
+
+      const safeEvaluate = (v) => {
+        try {
+          const result = compiledExpr.evaluate({ [variable]: v, pi: Math.PI, e: Math.E });
+          return Number.isFinite(result) ? result : 0;
+        } catch (err) {
+          return 0;
+        }
+      };
+
+      for (let i = 0; i <= n; i++) {
+        const x = a + i * h;
+        const weight = i === 0 || i === n ? 1 : i % 2 === 0 ? 2 : 4;
+        sum += weight * safeEvaluate(x);
+      }
+
+      return (h / 3) * sum;
+    };
+
+    const calculateDerivative = (compiledExpr, x, variable = 'x') => {
+      if (!compiledExpr) return 0;
+      const h = 1e-4 * Math.max(1, Math.abs(x));
+      const safeEval = (v) => {
+        try {
+          return compiledExpr.evaluate({ [variable]: v, pi: Math.PI, e: Math.E });
+        } catch (err) {
+          return NaN;
+        }
+      };
+      const forward = safeEval(x + h);
+      const backward = safeEval(x - h);
+      if (!isFinite(forward) || !isFinite(backward)) return NaN;
+      return (forward - backward) / (2 * h);
+    };
+
+    const App = () => {
+      const [functions, setFunctions] = useState([
+        {
+          id: 1,
+          mode: 'cartesian',
+          expression: 'sin(x) + cos(2x)',
+          visible: true,
+          color: COLORS[0],
+          integral: { enabled: true, a: 0, b: Math.PI, result: 0 },
+          derivative: { show: false },
+          domain: { start: -10, end: 10 },
+        },
+        {
+          id: 2,
+          mode: 'polar',
+          expression: '2 + sin(3*theta)',
+          visible: true,
+          color: COLORS[1],
+          integral: { enabled: true, a: 0, b: 2 * Math.PI, result: 0 },
+          derivative: { show: false },
+          domain: { start: 0, end: 2 * Math.PI },
+        },
+        {
+          id: 3,
+          mode: 'parametric',
+          xExpression: '2*cos(3*t)',
+          yExpression: 'sin(4*t)',
+          visible: true,
+          color: COLORS[2],
+          integral: { enabled: false, a: 0, b: 1, result: 0 },
+          derivative: { show: false },
+          domain: { start: 0, end: 2 * Math.PI },
+        },
+      ]);
+
+      const [viewState, setViewState] = useState({ scale: 60, offsetX: 0, offsetY: 0 });
+
+      const canvasRef = useRef(null);
+      const containerRef = useRef(null);
+      const isDragging = useRef(false);
+      const lastMousePos = useRef({ x: 0, y: 0 });
+
+      // 将原始函数数据编译成可评估对象，附带错误信息 & 积分结果
+      const processedFunctions = useMemo(() => {
+        return functions.map((f) => {
+          const hasContent = (value) => typeof value === 'string' && value.trim().length > 0;
+          let error = null;
+          let compiled = null;
+          let compiledY = null; // 专用于参数方程
+
+          try {
+            if (f.mode === 'parametric') {
+              const hasX = hasContent(f.xExpression);
+              const hasY = hasContent(f.yExpression);
+              if (hasX && hasY) {
+                compiled = math.compile(f.xExpression);
+                compiledY = math.compile(f.yExpression);
+              }
+            } else {
+              const expr = (f.expression || '').replace(/θ/g, 'theta');
+              if (hasContent(expr)) {
+                compiled = math.compile(expr);
+              }
+            }
+          } catch (err) {
+            error = err.message;
+          }
+
+          // 数值积分结果（仅直角坐标和极坐标支持）
+          let integralResult = null;
+          if (!error && compiled && f.integral.enabled) {
+            if (f.mode === 'cartesian') {
+              integralResult = calculateSimpsonIntegral(compiled, f.integral.a, f.integral.b, 800, 'x');
+            } else if (f.mode === 'polar') {
+              // 极坐标面积: 1/2 ∫ r^2 dθ
+              const wrapped = {
+                evaluate: (scope) => {
+                  const r = compiled.evaluate({ theta: scope.theta, pi: Math.PI, e: Math.E });
+                  return r * r * 0.5;
+                },
+              };
+              integralResult = calculateSimpsonIntegral(wrapped, f.integral.a, f.integral.b, 800, 'theta');
+            }
+          }
+
+          return {
+            ...f,
+            compiled,
+            compiledY,
+            error,
+            integralResult,
+          };
+        });
+      }, [functions]);
+
+      const processedMap = useMemo(() => {
+        const map = new Map();
+        processedFunctions.forEach((f) => map.set(f.id, f));
+        return map;
+      }, [processedFunctions]);
+
+      const toScreen = useCallback(
+        (x, y, width, height) => {
+          const cx = width / 2 + viewState.offsetX;
+          const cy = height / 2 + viewState.offsetY;
+          return [cx + x * viewState.scale, cy - y * viewState.scale];
+        },
+        [viewState]
+      );
+
+      const toWorldX = useCallback(
+        (screenX, width) => {
+          const cx = width / 2 + viewState.offsetX;
+          return (screenX - cx) / viewState.scale;
+        },
+        [viewState]
+      );
+
+      const draw = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+
+        ctx.clearRect(0, 0, width, height);
+
+        const cx = width / 2 + viewState.offsetX;
+        const cy = height / 2 + viewState.offsetY;
+
+        // Helper: draw grid
+        const drawGrid = () => {
+          ctx.lineWidth = 1;
+          ctx.font = '10px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+
+          const targetPixelStep = 80;
+          const rawStep = targetPixelStep / viewState.scale;
+          const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+          const residual = rawStep / magnitude;
+          let worldStep = magnitude;
+          if (residual > 5) worldStep = 10 * magnitude;
+          else if (residual > 2) worldStep = 5 * magnitude;
+          else if (residual > 1) worldStep = 2 * magnitude;
+
+          const startX = Math.floor(toWorldX(0, width) / worldStep) * worldStep;
+          const endX = toWorldX(width, width);
+
+          ctx.strokeStyle = '#e2e8f0';
+          ctx.fillStyle = '#64748b';
+
+          for (let x = startX; x <= endX; x += worldStep) {
+            const sx = cx + x * viewState.scale;
+            ctx.beginPath();
+            ctx.moveTo(sx, 0);
+            ctx.lineTo(sx, height);
+            ctx.stroke();
+            if (Math.abs(sx - cx) > 5) ctx.fillText(Number(x.toPrecision(12)).toString(), sx, cy + 5);
+          }
+
+          const topWorldY = cy / viewState.scale;
+          const bottomWorldY = (cy - height) / viewState.scale;
+          const gridStartY = Math.floor(bottomWorldY / worldStep) * worldStep;
+          const gridEndY = Math.ceil(topWorldY / worldStep) * worldStep;
+
+          for (let y = gridStartY; y <= gridEndY; y += worldStep) {
+            const sy = cy - y * viewState.scale;
+            ctx.beginPath();
+            ctx.moveTo(0, sy);
+            ctx.lineTo(width, sy);
+            ctx.stroke();
+            if (Math.abs(sy - cy) > 5) {
+              ctx.save();
+              ctx.textAlign = 'right';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(Number(y.toPrecision(12)).toString(), cx - 5, sy);
+              ctx.restore();
+            }
+          }
+
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#334155';
+          ctx.beginPath();
+          ctx.moveTo(0, cy);
+          ctx.lineTo(width, cy);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(cx, 0);
+          ctx.lineTo(cx, height);
+          ctx.stroke();
+        };
+
+        const renderCartesian = (func) => {
+          const { compiled } = func;
+          const safeEval = (x) => {
+            try {
+              const val = compiled.evaluate({ x, pi: Math.PI, e: Math.E });
+              return Number.isFinite(val) ? val : null;
+            } catch (err) {
+              return null;
+            }
+          };
+
+          // Fill integral area
+          if (func.integral.enabled) {
+            const { a, b } = func.integral;
+            const minX = Math.min(a, b);
+            const maxX = Math.max(a, b);
+            const [startPx] = toScreen(minX, 0, width, height);
+            const [endPx] = toScreen(maxX, 0, width, height);
+
+            if (endPx > 0 && startPx < width) {
+              ctx.beginPath();
+              ctx.moveTo(startPx, cy);
+
+              const stepPx = 2;
+              for (let px = startPx; px <= endPx; px += stepPx) {
+                const wx = toWorldX(px, width);
+                const wy = safeEval(wx) ?? 0;
+                const [, py] = toScreen(wx, wy, width, height);
+                ctx.lineTo(px, py);
+              }
+
+              ctx.lineTo(endPx, cy);
+              ctx.lineTo(startPx, cy);
+              ctx.fillStyle = func.color;
+              ctx.save();
+              ctx.globalAlpha = 0.16;
+              ctx.fill();
+              ctx.restore();
+            }
+          }
+
+          // Draw main curve
+          ctx.strokeStyle = func.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          let drawing = false;
+          const stepPx = 2;
+
+          for (let px = 0; px <= width; px += stepPx) {
+            const wx = toWorldX(px, width);
+            const wy = safeEval(wx);
+            if (!Number.isFinite(wy)) {
+              drawing = false;
+              continue;
+            }
+            const [, py] = toScreen(wx, wy, width, height);
+            if (!drawing) {
+              ctx.moveTo(px, py);
+              drawing = true;
+            } else {
+              ctx.lineTo(px, py);
+            }
+          }
+          ctx.stroke();
+
+          // Derivative curve
+          if (func.derivative.show) {
+            ctx.strokeStyle = `${func.color}`;
+            ctx.setLineDash([6, 4]);
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            let drawingDerivative = false;
+            for (let px = 0; px <= width; px += stepPx) {
+              const wx = toWorldX(px, width);
+              const slope = calculateDerivative(compiled, wx, 'x');
+              if (!Number.isFinite(slope)) {
+                drawingDerivative = false;
+                continue;
+              }
+              const [, py] = toScreen(wx, slope, width, height);
+              if (!drawingDerivative) {
+                ctx.moveTo(px, py);
+                drawingDerivative = true;
+              } else {
+                ctx.lineTo(px, py);
+              }
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        };
+
+        const renderPolar = (func) => {
+          const { compiled } = func;
+          const start = func.domain.start ?? 0;
+          const end = func.domain.end ?? 2 * Math.PI;
+          const steps = 600;
+          const step = (end - start) / steps;
+
+          const safeEval = (theta) => {
+            try {
+              const val = compiled.evaluate({ theta, pi: Math.PI, e: Math.E });
+              return Number.isFinite(val) ? val : null;
+            } catch (err) {
+              return null;
+            }
+          };
+
+          // Fill area for polar integral (relative to origin)
+          if (func.integral.enabled) {
+            const a = func.integral.a;
+            const b = func.integral.b;
+            const minTheta = Math.min(a, b);
+            const maxTheta = Math.max(a, b);
+            const stepTheta = (maxTheta - minTheta) / steps;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            for (let t = minTheta; t <= maxTheta; t += stepTheta) {
+              const r = safeEval(t) ?? 0;
+              const x = r * Math.cos(t);
+              const y = r * Math.sin(t);
+              const [px, py] = toScreen(x, y, width, height);
+              ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fillStyle = func.color;
+            ctx.save();
+            ctx.globalAlpha = 0.16;
+            ctx.fill();
+            ctx.restore();
+          }
+
+          ctx.strokeStyle = func.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          let drawing = false;
+
+          for (let t = start; t <= end; t += step) {
+            const r = safeEval(t);
+            if (!Number.isFinite(r)) {
+              drawing = false;
+              continue;
+            }
+            const x = r * Math.cos(t);
+            const y = r * Math.sin(t);
+            const [px, py] = toScreen(x, y, width, height);
+            if (!drawing) {
+              ctx.moveTo(px, py);
+              drawing = true;
+            } else {
+              ctx.lineTo(px, py);
+            }
+          }
+          ctx.stroke();
+        };
+
+        const renderParametric = (func) => {
+          const { compiled, compiledY } = func;
+          const start = func.domain.start ?? -10;
+          const end = func.domain.end ?? 10;
+          const steps = 800;
+          const step = (end - start) / steps;
+
+          const safeEval = (t, axis = 'x') => {
+            try {
+              const val = axis === 'x'
+                ? compiled.evaluate({ t, pi: Math.PI, e: Math.E })
+                : compiledY.evaluate({ t, pi: Math.PI, e: Math.E });
+              return Number.isFinite(val) ? val : null;
+            } catch (err) {
+              return null;
+            }
+          };
+
+          ctx.strokeStyle = func.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          let drawing = false;
+
+          for (let t = start; t <= end; t += step) {
+            const x = safeEval(t, 'x');
+            const y = safeEval(t, 'y');
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+              drawing = false;
+              continue;
+            }
+            const [px, py] = toScreen(x, y, width, height);
+            if (!drawing) {
+              ctx.moveTo(px, py);
+              drawing = true;
+            } else {
+              ctx.lineTo(px, py);
+            }
+          }
+          ctx.stroke();
+        };
+
+        drawGrid();
+
+        processedFunctions.forEach((func) => {
+          if (!func.visible || func.error || !func.compiled) return;
+          if (func.mode === 'cartesian') renderCartesian(func);
+          else if (func.mode === 'polar') renderPolar(func);
+          else if (func.mode === 'parametric') renderParametric(func);
+        });
+      }, [processedFunctions, toScreen, toWorldX, viewState]);
+
+      useLayoutEffect(() => {
+        const handleResize = () => {
+          if (containerRef.current && canvasRef.current) {
+            canvasRef.current.width = containerRef.current.offsetWidth;
+            canvasRef.current.height = containerRef.current.offsetHeight;
+            draw();
+          }
+        };
+        window.addEventListener('resize', handleResize);
+        handleResize();
+        return () => window.removeEventListener('resize', handleResize);
+      }, [draw]);
+
+      useEffect(() => {
+        draw();
+      }, [draw]);
+
+      const addFunction = () => {
+        const newId = functions.length > 0 ? Math.max(...functions.map((f) => f.id)) + 1 : 1;
+        const color = COLORS[(newId - 1) % COLORS.length];
+        setFunctions([
+          ...functions,
+          {
+            id: newId,
+            mode: 'cartesian',
+            expression: '',
+            visible: true,
+            color,
+            integral: { enabled: false, a: 0, b: 1, result: 0 },
+            derivative: { show: false },
+            domain: { start: -10, end: 10 },
+          },
+        ]);
+      };
+
+      const updateFunctionField = (id, field, value) => {
+        setFunctions((prev) => prev.map((f) => (f.id === id ? { ...f, [field]: value } : f)));
+      };
+
+      const updateIntegral = (id, payload) => {
+        setFunctions((prev) =>
+          prev.map((f) =>
+            f.id === id
+              ? {
+                  ...f,
+                  integral: { ...f.integral, ...payload },
+                }
+              : f
+          )
+        );
+      };
+
+      const updateDerivative = (id, payload) => {
+        setFunctions((prev) => prev.map((f) => (f.id === id ? { ...f, derivative: { ...f.derivative, ...payload } } : f)));
+      };
+
+      const updateDomain = (id, payload) => {
+        setFunctions((prev) => prev.map((f) => (f.id === id ? { ...f, domain: { ...f.domain, ...payload } } : f)));
+      };
+
+      const toggleVisibility = (id) => {
+        setFunctions((prev) => prev.map((f) => (f.id === id ? { ...f, visible: !f.visible } : f)));
+      };
+
+      const deleteFunction = (id) => setFunctions((prev) => prev.filter((f) => f.id !== id));
+
+      const changeMode = (id, mode) => {
+        setFunctions((prev) =>
+          prev.map((f) =>
+            f.id === id
+              ? {
+                  ...f,
+                  mode,
+                  // Reset expressions to avoid accidental misuse of variables
+                  expression: mode === 'parametric' ? '' : f.expression || '',
+                  xExpression: mode === 'parametric' ? f.xExpression || '' : f.xExpression,
+                  yExpression: mode === 'parametric' ? f.yExpression || '' : f.yExpression,
+                  integral: {
+                    ...f.integral,
+                    enabled: mode !== 'parametric' && f.integral.enabled,
+                  },
+                  derivative: {
+                    ...f.derivative,
+                    show: mode === 'cartesian' ? f.derivative.show : false,
+                  },
+                  domain:
+                    mode === 'cartesian'
+                      ? { start: -10, end: 10 }
+                      : { start: 0, end: 2 * Math.PI },
+                }
+              : f
+          )
+        );
+      };
+
+      const handleMouseDown = (e) => {
+        isDragging.current = true;
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+      };
+
+      const handleMouseMove = (e) => {
+        if (!isDragging.current) return;
+        const dx = e.clientX - lastMousePos.current.x;
+        const dy = e.clientY - lastMousePos.current.y;
+        setViewState((p) => ({ ...p, offsetX: p.offsetX + dx, offsetY: p.offsetY + dy }));
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+      };
+
+      const handleMouseUp = () => {
+        isDragging.current = false;
+      };
+
+      const handleWheel = (e) => {
+        e.preventDefault();
+        const zoomFactor = 1 + (e.deltaY < 0 ? 1 : -1) * 0.1;
+        setViewState((p) => ({ ...p, scale: Math.max(5, Math.min(p.scale * zoomFactor, 8000)) }));
+      };
+
+      const resetView = () => setViewState({ scale: 60, offsetX: 0, offsetY: 0 });
+
+      const renderInputFields = (func, processed) => {
+        if (func.mode === 'parametric') {
+          return (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 font-serif italic">x(t) =</span>
+                <input
+                  type="text"
+                  value={func.xExpression || ''}
+                  onChange={(e) => updateFunctionField(func.id, 'xExpression', e.target.value)}
+                  placeholder="cos(t)"
+                  className={`flex-1 bg-slate-50 border ${processed.error ? 'border-red-300 bg-red-50' : 'border-slate-200 focus:border-blue-400'} rounded px-2 py-1.5 text-sm outline-none transition-all font-mono text-slate-700`}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 font-serif italic">y(t) =</span>
+                <input
+                  type="text"
+                  value={func.yExpression || ''}
+                  onChange={(e) => updateFunctionField(func.id, 'yExpression', e.target.value)}
+                  placeholder="sin(t)"
+                  className={`flex-1 bg-slate-50 border ${processed.error ? 'border-red-300 bg-red-50' : 'border-slate-200 focus:border-blue-400'} rounded px-2 py-1.5 text-sm outline-none transition-all font-mono text-slate-700`}
+                />
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-serif italic">{func.mode === 'cartesian' ? 'y =' : 'r ='}</span>
+            <input
+              type="text"
+              value={func.expression}
+              onChange={(e) => updateFunctionField(func.id, 'expression', e.target.value)}
+              placeholder={func.mode === 'polar' ? '2 + sin(3*theta)' : 'sin(x)'}
+              className={`flex-1 bg-slate-50 border ${processed.error ? 'border-red-300 bg-red-50' : 'border-slate-200 focus:border-blue-400'} rounded px-2 py-1.5 text-sm outline-none transition-all font-mono text-slate-700`}
+            />
+          </div>
+        );
+      };
+
+      const renderIntegralControls = (func, processed) => {
+        if (!func.integral.enabled || processed.error) return null;
+        if (func.mode === 'parametric') return null;
+
+        const variableLabel = func.mode === 'cartesian' ? 'x' : 'θ';
+        const precision = (processed.integralResult ?? 0).toFixed(6);
+
+        return (
+          <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/50 rounded p-2">
+            <div className="flex items-center gap-2 text-sm text-slate-600 mb-2">
+              <span className="font-serif italic text-lg">∫</span>
+              <input
+                type="number"
+                value={func.integral.a}
+                onChange={(e) => updateIntegral(func.id, { a: parseFloat(e.target.value) })}
+                className="w-16 px-1 py-0.5 border border-slate-300 rounded text-center bg-white text-xs"
+              />
+              <span className="text-xs text-slate-400">to</span>
+              <input
+                type="number"
+                value={func.integral.b}
+                onChange={(e) => updateIntegral(func.id, { b: parseFloat(e.target.value) })}
+                className="w-16 px-1 py-0.5 border border-slate-300 rounded text-center bg-white text-xs"
+              />
+              <span className="text-xs text-slate-400">d{variableLabel}</span>
+            </div>
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400">面积/积分 ≈</span>
+              <span className="font-mono font-bold text-slate-700">{precision}</span>
+            </div>
+            {func.mode === 'polar' && <p className="text-[10px] text-slate-400 mt-1">极坐标使用 1/2 ∫ r(θ)^2 dθ</p>}
+          </div>
+        );
+      };
+
+      const renderDomainControls = (func) => {
+        if (func.mode === 'cartesian') return null;
+        const label = func.mode === 'polar' ? 'θ' : 't';
+        return (
+          <div className="flex items-center gap-2 text-xs text-slate-500 mt-2">
+            <span>范围</span>
+            <input
+              type="number"
+              value={func.domain.start}
+              onChange={(e) => updateDomain(func.id, { start: parseFloat(e.target.value) })}
+              className="w-16 px-1 py-0.5 border border-slate-300 rounded text-center bg-white"
+            />
+            <span className="text-slate-400">→</span>
+            <input
+              type="number"
+              value={func.domain.end}
+              onChange={(e) => updateDomain(func.id, { end: parseFloat(e.target.value) })}
+              className="w-16 px-1 py-0.5 border border-slate-300 rounded text-center bg-white"
+            />
+            <span className="text-slate-400">{label}</span>
+          </div>
+        );
+      };
+
+      return (
+        <div className="flex h-screen w-screen bg-slate-50 overflow-hidden">
+          {/* Sidebar */}
+          <div className="w-96 bg-white border-r border-slate-200 flex flex-col z-20 shadow-lg">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h1 className="font-bold text-slate-700 flex items-center gap-2">
+                <svg className="w-6 h-6 text-blue-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 3v18h18" />
+                  <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" />
+                </svg>
+                GeoGebra Lite · 高等版
+              </h1>
+              <button
+                onClick={addFunction}
+                className="p-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 shadow-sm transition-colors"
+                title="添加函数"
+              >
+                <PlusIcon />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {functions.map((func) => {
+                const processed = processedMap.get(func.id) || func;
+                return (
+                  <div key={func.id} className="group relative bg-white border border-slate-200 rounded-lg p-3 shadow-sm hover:shadow-md transition-all">
+                    {/* Header Line */}
+                    <div className="flex items-center gap-2 mb-2">
+                      <button
+                        onClick={() => toggleVisibility(func.id)}
+                        className="w-6 h-6 rounded-full flex items-center justify-center transition-opacity hover:opacity-80 shrink-0"
+                        style={{ backgroundColor: func.visible ? func.color : '#cbd5e1' }}
+                      >
+                        {func.visible ? <div className="w-2 h-2 bg-white rounded-full"></div> : <div className="w-2 h-2 bg-slate-400 rounded-full"></div>}
+                      </button>
+                      <span className="text-xs font-mono text-slate-400">f_{func.id}( {modeOptions.find((m) => m.value === func.mode)?.variable} )</span>
+
+                      <div className="ml-auto flex gap-1 items-center">
+                        <select
+                          value={func.mode}
+                          onChange={(e) => changeMode(func.id, e.target.value)}
+                          className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white text-slate-600"
+                        >
+                          {modeOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        {func.mode === 'cartesian' && (
+                          <button
+                            onClick={() => updateDerivative(func.id, { show: !func.derivative.show })}
+                            className={`p-1 rounded transition-colors ${func.derivative.show ? 'text-blue-600 bg-blue-50' : 'text-slate-300 hover:bg-slate-100'}`}
+                            title="显示导数曲线 (数值)"
+                          >
+                            <DerivativeIcon />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => func.mode !== 'parametric' && updateIntegral(func.id, { enabled: !func.integral.enabled })}
+                          disabled={func.mode === 'parametric'}
+                          className={`p-1 rounded transition-colors ${func.mode === 'parametric' ? 'text-slate-300 cursor-not-allowed' : 'hover:bg-slate-100'} ${func.integral.enabled && func.mode !== 'parametric' ? 'text-blue-600 bg-blue-50' : 'text-slate-300'}`}
+                          title={func.mode === 'parametric' ? '参数方程暂不支持积分' : '求积分 / 面积'}
+                        >
+                          <div className="text-[10px] font-bold font-serif">∫</div>
+                        </button>
+                        <button
+                          onClick={() => deleteFunction(func.id)}
+                          className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 transition-colors"
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Expression Inputs */}
+                    {renderInputFields(func, processed)}
+
+                    {/* Domain controls for polar/parametric */}
+                    {renderDomainControls(func)}
+
+                    {/* Integral Controls */}
+                    {renderIntegralControls(func, processed)}
+
+                    {/* Error Message */}
+                    {processed.error && (
+                      <div className="flex items-center gap-1 mt-2 text-xs text-red-500 animate-pulse">
+                        <AlertCircleIcon />
+                        <span>语法错误: {processed.error}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Canvas Area */}
+          <div className="flex-1 relative bg-slate-50 cursor-move" ref={containerRef}>
+            <canvas
+              ref={canvasRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onWheel={handleWheel}
+              className="absolute inset-0 z-10 touch-none"
+            />
+
+            <div className="absolute bottom-6 right-6 z-20 flex flex-col gap-2">
+              <button
+                onClick={resetView}
+                className="bg-white p-2 rounded-full shadow-lg border border-slate-200 text-slate-600 hover:text-blue-600 transition-colors"
+                title="重置视图"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="absolute top-4 right-4 z-20 bg-white/80 backdrop-blur px-3 py-1.5 rounded-full text-xs text-slate-500 shadow-sm border border-slate-200 pointer-events-none select-none">
+              Scale: {viewState.scale.toFixed(1)}px / unit
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

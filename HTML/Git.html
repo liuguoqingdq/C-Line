@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git 操作流程可视化演示</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f3f4f6;
+        }
+        .zone-card {
+            transition: all 0.3s ease;
+        }
+        .file-block {
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .file-enter {
+            animation: popIn 0.4s ease-out forwards;
+        }
+        @keyframes popIn {
+            0% { transform: scale(0); opacity: 0; }
+            70% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .arrow-flow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 2rem;
+            color: #9ca3af;
+            z-index: 0;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            height: 10px;
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #e2e8f0; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #94a3b8; 
+            border-radius: 5px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b; 
+        }
+        /* Drag to scroll styles */
+        .cursor-grab { cursor: grab; }
+        .cursor-grabbing { cursor: grabbing; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden select-none">
+
+    <!-- Header -->
+    <header class="bg-slate-800 text-white p-4 shadow-lg z-10 shrink-0">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold"><i class="fa-brands fa-git-alt text-orange-500 mr-2"></i>Git 原理可视化演示</h1>
+            <div class="text-sm text-slate-300 hidden md:block">
+                <span class="mr-4"><i class="fa-solid fa-circle text-blue-500 text-xs"></i> 未修改</span>
+                <span class="mr-4"><i class="fa-solid fa-circle text-yellow-500 text-xs"></i> 已修改</span>
+                <span class="mr-4"><i class="fa-solid fa-circle text-green-500 text-xs"></i> 已暂存</span>
+                <span><i class="fa-solid fa-circle text-purple-500 text-xs"></i> 已提交</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <!-- Changed justify-center to justify-start to fix overflow clipping -->
+    <!-- Added cursor-grab for drag functionality -->
+    <main id="scroll-container" class="flex-1 flex overflow-x-auto p-4 gap-4 relative bg-gray-100 items-stretch justify-start cursor-grab active:cursor-grabbing">
+
+        <!-- Zone 1: Working Directory -->
+        <div class="zone-card flex-1 min-w-[280px] bg-white rounded-xl shadow-md border-t-4 border-red-500 flex flex-col z-10 shrink-0">
+            <div class="p-3 border-b bg-red-50 rounded-t-xl">
+                <h2 class="font-bold text-gray-700 text-center"><i class="fa-solid fa-laptop-code mr-2"></i>工作目录</h2>
+                <p class="text-xs text-center text-gray-500">Working Directory</p>
+                <p class="text-xs text-center text-gray-400 mt-1">你的实际文件</p>
+            </div>
+            <div id="zone-working" class="flex-1 p-4 space-y-3 overflow-y-auto bg-gray-50 relative min-h-[150px]">
+                <!-- Files will be injected here -->
+            </div>
+        </div>
+
+        <!-- Arrow -->
+        <div class="flex flex-col justify-center items-center text-gray-400 z-0 shrink-0 min-w-[50px]">
+            <i class="fa-solid fa-arrow-right text-2xl mb-2"></i>
+            <span class="text-xs font-mono">add</span>
+        </div>
+
+        <!-- Zone 2: Staging Area -->
+        <div class="zone-card flex-1 min-w-[280px] bg-white rounded-xl shadow-md border-t-4 border-green-500 flex flex-col z-10 shrink-0">
+            <div class="p-3 border-b bg-green-50 rounded-t-xl">
+                <h2 class="font-bold text-gray-700 text-center"><i class="fa-solid fa-box-open mr-2"></i>暂存区</h2>
+                <p class="text-xs text-center text-gray-500">Staging Area / Index</p>
+                <p class="text-xs text-center text-gray-400 mt-1">准备提交的文件快照</p>
+            </div>
+            <div id="zone-staging" class="flex-1 p-4 space-y-3 overflow-y-auto bg-gray-50 relative min-h-[150px]">
+                <!-- Files will be injected here -->
+            </div>
+        </div>
+
+        <!-- Arrow -->
+        <div class="flex flex-col justify-center items-center text-gray-400 z-0 shrink-0 min-w-[50px]">
+            <i class="fa-solid fa-arrow-right text-2xl mb-2"></i>
+            <span class="text-xs font-mono">commit</span>
+        </div>
+
+        <!-- Zone 3: Local Repository -->
+        <div class="zone-card flex-1 min-w-[280px] bg-white rounded-xl shadow-md border-t-4 border-blue-500 flex flex-col z-10 shrink-0">
+            <div class="p-3 border-b bg-blue-50 rounded-t-xl">
+                <h2 class="font-bold text-gray-700 text-center"><i class="fa-solid fa-server mr-2"></i>本地仓库</h2>
+                <p class="text-xs text-center text-gray-500">Local Repository</p>
+                <p class="text-xs text-center text-gray-400 mt-1">历史版本记录 (HEAD)</p>
+            </div>
+            <div id="zone-local" class="flex-1 p-4 space-y-3 overflow-y-auto bg-gray-50 relative min-h-[150px]">
+                <!-- Files will be injected here -->
+            </div>
+        </div>
+
+        <!-- Arrow -->
+        <div class="flex flex-col justify-center items-center text-gray-400 z-0 shrink-0 min-w-[50px]">
+            <i class="fa-solid fa-arrow-right text-2xl mb-2"></i>
+            <span class="text-xs font-mono">push</span>
+        </div>
+
+        <!-- Zone 4: Remote Repository -->
+        <div class="zone-card flex-1 min-w-[280px] bg-white rounded-xl shadow-md border-t-4 border-purple-500 flex flex-col z-10 shrink-0">
+            <div class="p-3 border-b bg-purple-50 rounded-t-xl">
+                <h2 class="font-bold text-gray-700 text-center"><i class="fa-brands fa-github mr-2"></i>远程仓库</h2>
+                <p class="text-xs text-center text-gray-500">Remote Repository</p>
+                <p class="text-xs text-center text-gray-400 mt-1">GitHub / GitLab</p>
+            </div>
+            <div id="zone-remote" class="flex-1 p-4 space-y-3 overflow-y-auto bg-gray-50 relative min-h-[150px]">
+                <!-- Files will be injected here -->
+            </div>
+        </div>
+        
+        <!-- Padding right to make scrolling feel better -->
+        <div class="w-4 shrink-0"></div>
+
+    </main>
+
+    <!-- Controls & Console -->
+    <div class="bg-white border-t border-gray-300 shadow-[0_-5px_15px_rgba(0,0,0,0.1)] z-20 shrink-0">
+        <div class="container mx-auto p-4">
+            
+            <div class="flex flex-col md:flex-row gap-4">
+                
+                <!-- Action Buttons -->
+                <div class="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <button onclick="actions.modifyFile()" class="px-4 py-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded border border-yellow-300 transition flex items-center justify-center font-bold text-sm">
+                        <i class="fa-solid fa-pen-to-square mr-2"></i> 1. 修改文件
+                    </button>
+                    <button onclick="actions.gitAdd()" class="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded border border-green-300 transition flex items-center justify-center font-bold text-sm">
+                        <i class="fa-solid fa-plus mr-2"></i> 2. git add
+                    </button>
+                    <button onclick="actions.gitCommit()" class="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded border border-blue-300 transition flex items-center justify-center font-bold text-sm">
+                        <i class="fa-solid fa-check mr-2"></i> 3. git commit
+                    </button>
+                    <button onclick="actions.gitPush()" class="px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded border border-purple-300 transition flex items-center justify-center font-bold text-sm">
+                        <i class="fa-solid fa-cloud-arrow-up mr-2"></i> 4. git push
+                    </button>
+                    
+                    <div class="col-span-2 md:col-span-4 h-px bg-gray-200 my-1"></div>
+
+                    <button onclick="actions.simulateTeamPush()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-300 transition flex items-center justify-center font-bold text-sm">
+                        <i class="fa-solid fa-user-ninja mr-2"></i> 模拟他人提交
+                    </button>
+                    <button onclick="actions.gitPull()" class="px-4 py-2 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded border border-orange-300 transition flex items-center justify-center font-bold text-sm">
+                        <i class="fa-solid fa-cloud-arrow-down mr-2"></i> git pull
+                    </button>
+                    <button onclick="actions.resetDemo()" class="col-span-2 md:col-span-2 px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded border border-red-200 transition flex items-center justify-center font-bold text-sm">
+                        <i class="fa-solid fa-rotate-right mr-2"></i> 重置演示
+                    </button>
+                </div>
+
+                <!-- Terminal / Console -->
+                <div class="flex-1 bg-slate-900 rounded p-3 font-mono text-sm text-green-400 overflow-y-auto h-32 shadow-inner border border-slate-700" id="terminal">
+                    <div class="mb-1 opacity-50"># 系统初始化完成...</div>
+                    <div class="mb-1 opacity-50"># 您可以点击按钮，或在上方区域按住鼠标拖拽查看...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- State Management ---
+        const initialState = {
+            filename: "index.html",
+            version: 1,
+            // Track the version of the file in each zone
+            zones: {
+                working: { v: 1, status: 'clean' }, // clean, modified
+                staging: null,
+                local: { v: 1 },
+                remote: { v: 1 }
+            }
+        };
+
+        let appState = JSON.parse(JSON.stringify(initialState));
+
+        // --- DOM Elements ---
+        const zonesEl = {
+            working: document.getElementById('zone-working'),
+            staging: document.getElementById('zone-staging'),
+            local: document.getElementById('zone-local'),
+            remote: document.getElementById('zone-remote')
+        };
+        const terminalEl = document.getElementById('terminal');
+
+        // --- Drag to Scroll Implementation ---
+        const slider = document.getElementById('scroll-container');
+        let isDown = false;
+        let startX;
+        let scrollLeft;
+
+        slider.addEventListener('mousedown', (e) => {
+            isDown = true;
+            slider.classList.add('active'); // Tailwind active class handles cursor
+            startX = e.pageX - slider.offsetLeft;
+            scrollLeft = slider.scrollLeft;
+        });
+
+        slider.addEventListener('mouseleave', () => {
+            isDown = false;
+            slider.classList.remove('active');
+        });
+
+        slider.addEventListener('mouseup', () => {
+            isDown = false;
+            slider.classList.remove('active');
+        });
+
+        slider.addEventListener('mousemove', (e) => {
+            if(!isDown) return;
+            e.preventDefault();
+            const x = e.pageX - slider.offsetLeft;
+            const walk = (x - startX) * 2; // Scroll-fast
+            slider.scrollLeft = scrollLeft - walk;
+        });
+
+        // --- Helpers ---
+        function log(command, desc) {
+            const line = document.createElement('div');
+            line.className = "mb-1 border-l-2 border-green-500 pl-2 animate-pulse";
+            line.innerHTML = `<span class="text-white">$ ${command}</span><br><span class="text-gray-400 text-xs">${desc}</span>`;
+            terminalEl.appendChild(line);
+            terminalEl.scrollTop = terminalEl.scrollHeight;
+            
+            // Remove animation class after a bit
+            setTimeout(() => line.classList.remove('animate-pulse'), 500);
+        }
+
+        function createFileBlock(version, status, context) {
+            if (!version) return '';
+            
+            let colorClass = "bg-blue-50 border-blue-200 text-blue-700";
+            let icon = "fa-file-code";
+            let badge = "";
+
+            if (context === 'working') {
+                if (status === 'modified') {
+                    colorClass = "bg-yellow-50 border-yellow-300 text-yellow-700";
+                    badge = `<span class="absolute -top-2 -right-2 bg-yellow-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow">Modified</span>`;
+                } else {
+                    badge = `<span class="absolute -top-2 -right-2 bg-gray-400 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow">Clean</span>`;
+                }
+            } else if (context === 'staging') {
+                colorClass = "bg-green-50 border-green-300 text-green-700";
+                badge = `<span class="absolute -top-2 -right-2 bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow">Staged</span>`;
+            } else if (context === 'local') {
+                colorClass = "bg-purple-50 border-purple-300 text-purple-700";
+                icon = "fa-code-commit";
+                badge = `<span class="absolute -top-2 -right-2 bg-purple-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow">HEAD</span>`;
+            } else if (context === 'remote') {
+                colorClass = "bg-indigo-50 border-indigo-300 text-indigo-700";
+                icon = "fa-cloud";
+                badge = `<span class="absolute -top-2 -right-2 bg-indigo-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow">Origin</span>`;
+            }
+
+            return `
+                <div class="file-block file-enter relative p-3 rounded border ${colorClass} shadow-sm flex items-center gap-3 select-none">
+                    <div class="text-xl w-8 text-center"><i class="fa-solid ${icon}"></i></div>
+                    <div class="flex-1 min-w-0">
+                        <div class="font-bold text-sm truncate">${appState.filename}</div>
+                        <div class="text-xs opacity-75">Content: "Version ${version}"</div>
+                    </div>
+                    ${badge}
+                </div>
+            `;
+        }
+
+        function render() {
+            // Render Working
+            zonesEl.working.innerHTML = createFileBlock(appState.zones.working.v, appState.zones.working.status, 'working');
+            
+            // Render Staging
+            if (appState.zones.staging) {
+                zonesEl.staging.innerHTML = createFileBlock(appState.zones.staging.v, 'staged', 'staging');
+            } else {
+                zonesEl.staging.innerHTML = `<div class="text-center text-gray-300 text-sm mt-10 italic">空 (Empty)</div>`;
+            }
+
+            // Render Local
+            zonesEl.local.innerHTML = createFileBlock(appState.zones.local.v, null, 'local');
+
+            // Render Remote
+            zonesEl.remote.innerHTML = createFileBlock(appState.zones.remote.v, null, 'remote');
+        }
+
+        // --- Actions ---
+        const actions = {
+            modifyFile: () => {
+                appState.zones.working.v += 1;
+                appState.zones.working.status = 'modified';
+                log(`echo "code..." >> ${appState.filename}`, "在工作目录修改了文件内容");
+                render();
+            },
+
+            gitAdd: () => {
+                if (appState.zones.working.status !== 'modified') {
+                    log("git add .", "没有检测到修改，无需添加到暂存区");
+                    return;
+                }
+                // Copy working state to staging
+                appState.zones.staging = { v: appState.zones.working.v };
+                log("git add .", "将工作目录的变更添加到了暂存区");
+                render();
+            },
+
+            gitCommit: () => {
+                if (!appState.zones.staging) {
+                    log("git commit -m '...'", "暂存区为空，无法提交");
+                    return;
+                }
+                // Move staging to local
+                appState.zones.local.v = appState.zones.staging.v;
+                appState.zones.staging = null; // Clear staging
+                // Working directory is now "clean" relative to this commit? 
+                // In reality, git status checks working vs local. Since we just committed, if working == local, it's clean.
+                if (appState.zones.working.v === appState.zones.local.v) {
+                    appState.zones.working.status = 'clean';
+                }
+                log(`git commit -m "update v${appState.zones.local.v}"`, "将暂存区的内容提交到本地仓库历史中");
+                render();
+            },
+
+            gitPush: () => {
+                if (appState.zones.local.v === appState.zones.remote.v) {
+                    log("git push", "本地版本与远程一致，无需推送");
+                    return;
+                }
+                if (appState.zones.local.v < appState.zones.remote.v) {
+                    log("git push", "❌ 失败！远程版本比本地新，请先 pull");
+                    return;
+                }
+                appState.zones.remote.v = appState.zones.local.v;
+                log("git push origin main", "将本地提交推送到远程仓库");
+                render();
+            },
+
+            simulateTeamPush: () => {
+                appState.zones.remote.v += 1;
+                log("Simulated: Teammate Push", "模拟队友向远程仓库推送了新代码 (Version " + appState.zones.remote.v + ")");
+                render();
+            },
+
+            gitPull: () => {
+                if (appState.zones.remote.v <= appState.zones.local.v && appState.zones.remote.v <= appState.zones.working.v) {
+                    log("git pull", "本地已是最新");
+                    return;
+                }
+                
+                const newVer = appState.zones.remote.v;
+                // Pull updates Local AND Working dir usually (unless conflict)
+                appState.zones.local.v = newVer;
+                appState.zones.working.v = newVer;
+                appState.zones.working.status = 'clean';
+                appState.zones.staging = null; // Clear staging usually on pull if fast-forward
+
+                log("git pull origin main", `拉取远程代码 (v${newVer}) 并合并到本地及工作目录`);
+                render();
+            },
+
+            resetDemo: () => {
+                appState = JSON.parse(JSON.stringify(initialState));
+                terminalEl.innerHTML = '<div class="mb-1 opacity-50"># 重置演示环境...</div>';
+                render();
+            }
+        };
+
+        // Init
+        render();
+
+    </script>
+</body>
+</html>

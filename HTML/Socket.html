@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket 网络编程知识图谱</title>
+    <style>
+        :root {
+            --blue-bg: #e3f2fd;
+            --blue-border: #2196f3;
+            --blue-text: #0d47a1;
+            
+            --green-bg: #e8f5e9;
+            --green-border: #4caf50;
+            --green-text: #1b5e20;
+            
+            --orange-bg: #fff3e0;
+            --orange-border: #ff9800;
+            --orange-text: #e65100;
+            
+            --purple-bg: #f3e5f5;
+            --purple-border: #9c27b0;
+            --purple-text: #4a148c;
+
+            --line-color: #999;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+            background-color: #f9f9f9;
+            color: #333;
+            line-height: 1.6;
+            padding: 40px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            max-width: 1400px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        /* 标题样式 */
+        h1 {
+            margin-bottom: 40px;
+            color: #333;
+            font-weight: 300;
+            text-align: center;
+        }
+
+        /* 通用卡片样式 */
+        .node {
+            background: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            position: relative;
+            transition: transform 0.2s;
+            width: 100%;
+        }
+
+        .node:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+
+        .node-title {
+            font-weight: bold;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            text-align: center;
+            border-bottom: 2px solid transparent;
+            padding-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .node-content {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .sub-group {
+            flex: 1;
+            min-width: 200px;
+            background: rgba(255,255,255,0.6);
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .sub-title {
+            font-weight: bold;
+            font-size: 0.95em;
+            margin-bottom: 8px;
+            text-align: center;
+            opacity: 0.8;
+            border-bottom: 1px dashed rgba(0,0,0,0.1);
+            padding-bottom: 4px;
+        }
+
+        ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        li {
+            font-size: 0.9em;
+            margin-bottom: 6px;
+            position: relative;
+            padding-left: 15px;
+        }
+
+        li::before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: inherit;
+        }
+
+        /* 连线系统 */
+        .connector-v {
+            width: 2px;
+            background-color: var(--line-color);
+            height: 40px;
+            margin: 0 auto;
+        }
+
+        .branch-container {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            gap: 40px;
+            position: relative;
+        }
+
+        /* 顶部横向连接线 */
+        .branch-container::before {
+            content: '';
+            position: absolute;
+            top: -20px; /* 向上偏移以连接上级 */
+            left: 25%;
+            right: 25%;
+            height: 2px;
+            background-color: var(--line-color);
+            z-index: -1;
+        }
+        
+        .branch-container::after {
+            content: '';
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            width: 2px;
+            height: 20px;
+            background-color: var(--line-color);
+        }
+
+        /* 连接到下一级的线条 */
+        .branch-connector {
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            height: 20px;
+            width: 2px;
+            background-color: var(--line-color);
+        }
+
+        /* 底部汇聚线条 */
+        .merge-container {
+            position: relative;
+            width: 100%;
+            height: 40px;
+        }
+        
+        .merge-container::before {
+            content: '';
+            position: absolute;
+            top: 20px;
+            left: 25%;
+            right: 25%;
+            height: 2px;
+            background-color: var(--line-color);
+        }
+
+        .merge-line-left, .merge-line-right {
+            position: absolute;
+            top: 0;
+            height: 20px;
+            width: 2px;
+            background-color: var(--line-color);
+        }
+        .merge-line-left { left: 25%; }
+        .merge-line-right { right: 75%; left: auto; } /* 修正右侧定位 */
+        
+        /* 修正：右侧线条应该是 left: 75% 或者 right: 25% */
+        .merge-line-right-fix {
+            position: absolute;
+            top: 0;
+            right: 25%;
+            height: 20px;
+            width: 2px;
+            background-color: var(--line-color);
+        }
+
+        .merge-line-center {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            height: 20px;
+            width: 2px;
+            background-color: var(--line-color);
+        }
+
+
+        /* ===== 特定颜色主题 ===== */
+
+        /* 1. 蓝色：Socket定义 */
+        .theme-blue {
+            background-color: var(--blue-bg);
+            border: 2px solid var(--blue-border);
+            color: var(--blue-text);
+        }
+        .theme-blue .node-title { border-color: var(--blue-border); }
+        .theme-blue li::before { color: var(--blue-border); }
+
+        /* 2. 绿色：TCP */
+        .theme-green {
+            background-color: var(--green-bg);
+            border: 2px solid var(--green-border);
+            color: var(--green-text);
+        }
+        .theme-green .node-title { border-color: var(--green-border); }
+        .theme-green li::before { color: var(--green-border); }
+
+        /* 3. 橙色：UDP */
+        .theme-orange {
+            background-color: var(--orange-bg);
+            border: 2px solid var(--orange-border);
+            color: var(--orange-text);
+        }
+        .theme-orange .node-title { border-color: var(--orange-border); }
+        .theme-orange li::before { color: var(--orange-border); }
+
+        /* 4. 紫色：C/S模式 */
+        .theme-purple {
+            background-color: var(--purple-bg);
+            border: 2px solid var(--purple-border);
+            color: var(--purple-text);
+        }
+        .theme-purple .node-title { border-color: var(--purple-border); }
+        
+        /* 流程图样式 */
+        .process-flow {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+            justify-content: center;
+        }
+        
+        .step {
+            background: #fff;
+            padding: 8px 15px;
+            border-radius: 20px;
+            border: 1px solid var(--purple-border);
+            font-size: 0.9em;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .arrow {
+            color: var(--purple-border);
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            .branch-container {
+                flex-direction: column;
+                gap: 20px;
+            }
+            
+            .branch-container::before, .branch-container::after, .merge-container {
+                display: none; /* 移动端隐藏复杂连线 */
+            }
+
+            .branch-connector {
+                display: none;
+            }
+
+            .connector-v {
+                height: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Socket 网络编程知识图谱</h1>
+
+    <!-- 1. 根节点：Socket 定义 -->
+    <div class="node theme-blue" style="max-width: 960px;">
+        <div class="node-title">🔵 Socket：网络通信基石</div>
+        <div class="node-content">
+            <div class="sub-group">
+                <div class="sub-title">定义</div>
+                <ul>
+                    <li><strong>唯一标识通信端点：</strong></li>
+                    <li>IP地址 + 端口号</li>
+                </ul>
+            </div>
+            <div class="sub-group">
+                <div class="sub-title">应用层与传输层的桥梁</div>
+                <ul>
+                    <li>数据封装/解封装</li>
+                </ul>
+            </div>
+            <div class="sub-group">
+                <div class="sub-title">核心类型</div>
+                <ul>
+                    <li><strong>TCP Socket</strong> (可靠流)</li>
+                    <li><strong>UDP Socket</strong> (数据报)</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- 连接线 -->
+    <div class="connector-v"></div>
+
+    <!-- 2. 分支层：TCP 与 UDP -->
+    <div class="branch-container">
+        
+        <!-- TCP 模块 -->
+        <div class="node theme-green" style="flex: 1;">
+            <div class="branch-connector"></div> <!-- 连接上线 -->
+            <div class="node-title">🟢 TCP：可靠连接协议</div>
+            <div class="node-content" style="display: block;">
+                
+                <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                    <div class="sub-group">
+                        <div class="sub-title">建立连接</div>
+                        <ul>
+                            <li><strong>三次握手：</strong></li>
+                            <li>SYN &rarr; SYN-ACK &rarr; ACK</li>
+                        </ul>
+                    </div>
+                    <div class="sub-group">
+                        <div class="sub-title">可靠保障</div>
+                        <ul>
+                            <li>序列号 (Sequence)</li>
+                            <li>确认重传 (ACK)</li>
+                            <li>滑动窗口 (Flow Control)</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 15px;">
+                    <div class="sub-group">
+                        <div class="sub-title">特性</div>
+                        <ul>
+                            <li>面向字节流 (需处理粘包)</li>
+                            <li>全双工通信</li>
+                        </ul>
+                    </div>
+                    <div class="sub-group">
+                        <div class="sub-title">应用场景</div>
+                        <ul>
+                            <li>网页浏览 (HTTP/HTTPS)</li>
+                            <li>文件传输 (FTP)</li>
+                            <li>邮件发送 (SMTP)</li>
+                        </ul>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- UDP 模块 -->
+        <div class="node theme-orange" style="flex: 1;">
+            <div class="branch-connector"></div> <!-- 连接上线 -->
+            <div class="node-title">🟠 UDP：无连接协议</div>
+            <div class="node-content" style="display: block;">
+                
+                <div class="sub-group" style="margin-bottom: 15px;">
+                    <div class="sub-title">核心机制</div>
+                    <ul>
+                        <li>无需握手，直接发送</li>
+                        <li>开销小，速度快</li>
+                    </ul>
+                </div>
+
+                <div style="display: flex; gap: 15px;">
+                    <div class="sub-group">
+                        <div class="sub-title">特性</div>
+                        <ul>
+                            <li>无状态连接</li>
+                            <li>面向数据报 (报文完整)</li>
+                            <li>支持广播/多播</li>
+                        </ul>
+                    </div>
+                    <div class="sub-group">
+                        <div class="sub-title">应用场景</div>
+                        <ul>
+                            <li>实时视频流 (RTP)</li>
+                            <li>在线游戏</li>
+                            <li>DNS 查询</li>
+                        </ul>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 汇聚线 -->
+    <div class="merge-container">
+        <div class="merge-line-left"></div>
+        <div class="merge-line-right-fix"></div>
+        <div class="merge-line-center"></div>
+    </div>
+
+    <!-- 3. 应用层：C/S 模式 -->
+    <div class="node theme-purple" style="max-width: 1000px;">
+        <div class="node-title">🟣 客户端 / 服务器模式 (C/S Model)</div>
+        
+        <!-- 服务端流程 -->
+        <div style="margin-bottom: 20px;">
+            <div class="sub-title" style="text-align: left; margin-left: 20px;">🖥️ 服务端流程 (Server)</div>
+            <div class="process-flow">
+                <div class="step">1. 创建 Socket</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">2. 绑定端口 (bind)</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">3. 监听 (listen)</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">4. 接受连接 (accept)</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">5. 数据交换 (send/recv)</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">6. 关闭连接 (close)</div>
+            </div>
+        </div>
+
+        <!-- 客户端流程 -->
+        <div>
+            <div class="sub-title" style="text-align: left; margin-left: 20px;">📱 客户端流程 (Client)</div>
+            <div class="process-flow">
+                <div class="step">1. 创建 Socket</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">2. 连接服务器 (connect)</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">3. 发送请求 (send)</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">4. 接收响应 (recv)</div>
+                <div class="arrow">&rarr;</div>
+                <div class="step">5. 关闭连接 (close)</div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+</body>
+</html>

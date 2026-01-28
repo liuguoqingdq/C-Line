@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MySQL Update 核心原理交互模拟器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        
+        /* 环形 Redo Log 动画 */
+        .redo-circle { position: relative; width: 140px; height: 140px; border-radius: 50%; border: 8px solid #334155; }
+        .pointer { position: absolute; width: 4px; height: 50%; left: calc(50% - 2px); bottom: 50%; transform-origin: bottom center; transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
+        .write-pos { background: #f97316; z-index: 20; }
+        .checkpoint { background: #3b82f6; z-index: 10; }
+        
+        /* 数据流动粒子 */
+        .particle { position: absolute; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; z-index: 100; transition: all 0.8s ease-in-out; }
+        
+        /* 步骤状态样式 */
+        .step-node { transition: all 0.3s; }
+        .step-node.active { border-color: #3b82f6; background: #1e293b; transform: translateX(8px); }
+        .step-node.completed { opacity: 0.6; }
+
+        /* 脏页闪烁提醒 */
+        @keyframes dirty-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .dirty-page { animation: dirty-pulse 2s infinite; border: 2px solid #ef4444 !important; }
+
+        .flow-node { transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s; }
+        .flow-node.active { transform: translateY(-4px) scale(1.02); box-shadow: 0 10px 30px rgba(59, 130, 246, 0.2); }
+    </style>
+</head>
+<body class="p-4">
+
+    <div class="max-w-7xl mx-auto space-y-6">
+        <!-- 顶部状态栏 -->
+        <div class="flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-800/50 p-4 rounded-2xl border border-slate-700">
+            <div>
+                <h1 class="text-2xl font-bold text-white flex items-center gap-2">
+                    <span class="text-blue-500">MySQL</span> UPDATE 执行流程可视化
+                </h1>
+                <p class="text-slate-400 text-sm">正在模拟：<code class="text-yellow-400">UPDATE users SET name='xiaolin' WHERE id=1;</code></p>
+            </div>
+            <div class="flex gap-4">
+                <div class="text-center bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-700">
+                    <div class="text-[10px] uppercase text-slate-500 font-bold">LSN (日志序列号)</div>
+                    <div id="lsn-val" class="mono text-blue-400 font-bold">1024000</div>
+                </div>
+                <div class="text-center bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-700">
+                    <div class="text-[10px] uppercase text-slate-500 font-bold">事务状态</div>
+                    <div id="trx-state" class="mono text-slate-400 font-bold">IDLE</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 流程总览 -->
+        <div class="bg-slate-800/40 border border-slate-700 rounded-2xl p-4 space-y-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-sm font-bold text-slate-300 uppercase tracking-widest">一眼看懂：核心流程路径</h2>
+                <div class="text-[10px] text-slate-500">点击“下一步”逐步点亮流程</div>
+            </div>
+            <div class="flex flex-col lg:flex-row items-center gap-3">
+                <div id="flow-client" class="flow-node px-4 py-3 rounded-xl border border-slate-700 bg-slate-900 text-xs uppercase text-slate-300 font-bold">SQL 执行器</div>
+                <div class="text-slate-600">→</div>
+                <div id="flow-buffer" class="flow-node px-4 py-3 rounded-xl border border-blue-700/60 bg-blue-900/30 text-xs uppercase text-blue-200 font-bold">Buffer Pool</div>
+                <div class="text-slate-600">→</div>
+                <div id="flow-redo" class="flow-node px-4 py-3 rounded-xl border border-orange-700/60 bg-orange-900/20 text-xs uppercase text-orange-200 font-bold">Redo Log</div>
+                <div class="text-slate-600">→</div>
+                <div id="flow-binlog" class="flow-node px-4 py-3 rounded-xl border border-green-700/60 bg-green-900/20 text-xs uppercase text-green-200 font-bold">Binlog</div>
+                <div class="text-slate-600">→</div>
+                <div id="flow-disk" class="flow-node px-4 py-3 rounded-xl border border-slate-700 bg-slate-900 text-xs uppercase text-slate-300 font-bold">磁盘落盘</div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] text-slate-400">
+                <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-3">
+                    <div class="font-bold text-blue-300 mb-1">先内存，后磁盘</div>
+                    Buffer Pool 先更新并标记脏页，磁盘稍后同步。
+                </div>
+                <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-3">
+                    <div class="font-bold text-orange-300 mb-1">先 Redo，再 Binlog</div>
+                    2PC 确保两套日志原子性一致。
+                </div>
+                <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-3">
+                    <div class="font-bold text-green-300 mb-1">故障可恢复</div>
+                    Redo 落盘后即便断电也能恢复。
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-12 gap-6">
+            
+            <!-- 左侧控制面板 -->
+            <div class="col-span-12 lg:col-span-4 space-y-3">
+                <div class="bg-slate-800 rounded-2xl border border-slate-700 p-4 shadow-xl">
+                    <h2 class="text-sm font-bold text-slate-400 uppercase mb-4 tracking-widest">执行流水线</h2>
+                    <div id="step-list" class="space-y-2">
+                        <!-- 动态生成的步骤 -->
+                    </div>
+                    <div class="mt-4">
+                        <div class="text-[10px] uppercase text-slate-500">进度</div>
+                        <div class="h-2 bg-slate-900 rounded-full overflow-hidden">
+                            <div id="progress-bar" class="h-full bg-blue-500 transition-all duration-500" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex gap-2">
+                        <button id="next-btn" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/20 active:scale-95">下一步 (Next Step)</button>
+                        <button id="reset-btn" class="px-4 bg-slate-700 hover:bg-slate-600 rounded-xl transition-colors text-sm">重置</button>
+                    </div>
+                </div>
+
+                <div class="bg-blue-900/20 border border-blue-800/50 p-4 rounded-2xl text-sm">
+                    <h3 class="font-bold text-blue-400 mb-2">💡 当前步骤解读</h3>
+                    <div class="text-xs text-blue-200/80 space-y-2">
+                        <div class="font-bold text-blue-300" id="current-step-label">等待开始</div>
+                        <p id="current-step-desc" class="leading-relaxed">
+                            点击“下一步”观察数据如何在内存与日志间流动。
+                        </p>
+                        <div class="italic text-blue-200/70" id="tip-text">提示：每个步骤都会点亮对应组件。</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧视觉演示区 -->
+            <div class="col-span-12 lg:col-span-8 space-y-6">
+                
+                <!-- 内存区域 -->
+                <div class="relative bg-slate-800/40 rounded-3xl border-2 border-slate-700 p-6 min-h-[300px]">
+                    <div class="absolute -top-3 left-6 bg-slate-900 px-3 py-1 border border-slate-700 rounded-full text-[10px] font-bold text-blue-400 uppercase">内存区 (Buffer Pool)</div>
+                    
+                    <div class="grid grid-cols-3 gap-6">
+                        <div class="col-span-2 space-y-4">
+                            <h4 class="text-xs font-bold text-slate-500 uppercase italic">数据页缓冲</h4>
+                            <div class="flex gap-4">
+                                <div id="page-1" class="w-32 h-32 bg-slate-700 rounded-2xl border-2 border-slate-600 flex flex-col items-center justify-center p-2 text-center transition-all duration-500">
+                                    <div class="text-[10px] text-slate-400 mb-1">Page: id=1</div>
+                                    <div id="page-val" class="font-bold text-sm">name: 'none'</div>
+                                    <div id="page-lsn" class="text-[9px] mt-2 opacity-50 mono">LSN: 0</div>
+                                </div>
+                                <div id="page-undo" class="w-24 h-32 bg-slate-700/50 rounded-2xl border-2 border-slate-600/50 flex flex-col items-center justify-center p-2 text-center opacity-30 transition-all">
+                                    <div class="text-[10px] text-slate-400">Undo Log</div>
+                                    <div class="text-[8px] mt-2 text-purple-400">Old: 'none'</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-span-1 space-y-4">
+                            <h4 class="text-xs font-bold text-slate-500 uppercase italic">日志缓冲</h4>
+                            <div id="log-buffer" class="h-32 bg-slate-900/50 rounded-2xl border-2 border-slate-700 p-3 space-y-2 overflow-hidden flex flex-col">
+                                <div class="text-[9px] text-orange-500 font-bold uppercase">Redo Log Buffer</div>
+                                <div id="redo-buf-items" class="flex-1 text-[8px] mono space-y-1">
+                                    <div class="text-slate-600 italic">Empty...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 磁盘与持久化层 -->
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-6">
+                    
+                    <!-- Redo Log 环形文件 -->
+                    <div id="box-redolog" class="bg-slate-800 rounded-2xl border border-slate-700 p-4 flex flex-col items-center relative overflow-hidden transition-all duration-300">
+                        <div class="text-[10px] font-bold text-orange-400 mb-4 uppercase">Redo Log (ib_logfile)</div>
+                        <div class="redo-circle shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]">
+                            <div id="ptr-write" class="pointer write-pos" style="transform: rotate(45deg)">
+                                <div class="absolute top-0 -translate-x-1/2 -translate-y-full text-[8px] bg-orange-500 px-1 rounded">write_pos</div>
+                            </div>
+                            <div id="ptr-cp" class="pointer checkpoint" style="transform: rotate(10deg)">
+                                <div class="absolute top-0 -translate-x-1/2 -translate-y-full text-[8px] bg-blue-500 px-1 rounded text-white">checkpoint</div>
+                            </div>
+                            <div class="absolute inset-0 flex items-center justify-center text-[10px] text-slate-500 font-bold text-center leading-tight">环形<br>缓冲</div>
+                        </div>
+                    </div>
+
+                    <!-- Binlog 文件 -->
+                    <div id="binlog-file" class="bg-slate-800 rounded-2xl border border-slate-700 p-4 flex flex-col h-48 transition-all duration-300">
+                        <div class="text-[10px] font-bold text-green-400 mb-2 uppercase">Binlog (Archive)</div>
+                        <div id="binlog-content" class="flex-1 bg-black/40 rounded-lg p-2 font-mono text-[9px] overflow-hidden space-y-1">
+                            <div class="text-slate-700"># Binlog header</div>
+                        </div>
+                    </div>
+
+                    <!-- 物理数据存储 -->
+                    <div id="disk-storage" class="col-span-2 md:col-span-1 bg-slate-900 rounded-2xl border border-slate-700 p-4 flex flex-col justify-center items-center gap-3">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Disk: users.ibd</div>
+                        <div id="disk-page" class="w-full bg-slate-800 border border-slate-700 p-3 rounded-xl text-center">
+                            <div class="text-[9px] opacity-40">Disk Page 1</div>
+                            <div id="disk-val" class="text-xs font-bold text-slate-300">name: 'none'</div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <div id="disk-io-light" class="w-2 h-2 rounded-full bg-slate-700"></div>
+                            <span class="text-[9px] text-slate-500 uppercase">Disk I/O 活跃</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 两阶段提交状态栏 -->
+                <div class="bg-slate-800/80 rounded-2xl border border-slate-700 p-4 overflow-hidden relative">
+                    <h4 class="text-[10px] font-bold text-slate-500 mb-3 uppercase">2PC (两阶段提交) 状态链</h4>
+                    <div class="flex items-center gap-4">
+                        <div id="state-prepare" class="flex-1 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-[10px] font-bold border border-slate-700 transition-all uppercase">Redo Prepare</div>
+                        <div class="text-slate-600">→</div>
+                        <div id="state-binlog" class="flex-1 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-[10px] font-bold border border-slate-700 transition-all uppercase">Binlog Write</div>
+                        <div class="text-slate-600">→</div>
+                        <div id="state-commit" class="flex-1 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-[10px] font-bold border border-slate-700 transition-all uppercase">Redo Commit</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 核心步骤配置
+        const steps = [
+            {
+                label: "查找与加载数据页",
+                desc: "执行器检查 Buffer Pool，若页不在内存中，从磁盘载入。",
+                tip: "缓冲池极大减少了磁盘随机 I/O，让后续操作都在内存中进行。",
+                flowIds: ["flow-client", "flow-buffer", "flow-disk"],
+                action: async () => {
+                    spawnParticle('disk-storage', 'page-1', '#3b82f6');
+                    await delay(800);
+                    setEl('page-val', "name: 'none'");
+                    highlight('page-1', 'blue');
+                }
+            },
+            {
+                label: "记录 Undo Log",
+                desc: "修改前先写 Undo，记录旧值并生成 Redo 保护。",
+                tip: "Undo Log 支撑事务原子性与 MVCC。",
+                flowIds: ["flow-buffer", "flow-redo"],
+                action: async () => {
+                    setEl('page-undo', "Old: 'none'", true);
+                    document.getElementById('page-undo').style.opacity = "1";
+                    addRedoBuf("UNDO_REC: id=1");
+                    highlight('page-undo', 'purple');
+                }
+            },
+            {
+                label: "更新内存数据 (脏页)",
+                desc: "InnoDB 修改内存页，标记为脏页。",
+                tip: "此时内存最新，磁盘最旧（WAL 允许延迟同步）。",
+                flowIds: ["flow-buffer"],
+                action: async () => {
+                    setEl('page-val', "name: 'xiaolin'");
+                    document.getElementById('page-val').classList.add('text-red-500');
+                    document.getElementById('page-1').classList.add('dirty-page');
+                    addRedoBuf("SET: id=1 -> 'xiaolin'");
+                }
+            },
+            {
+                label: "2PC: Prepare 阶段",
+                desc: "Redo 进入 Prepare 状态并强刷到磁盘。",
+                tip: "Redo 是物理日志，顺序写性能极佳。",
+                flowIds: ["flow-redo"],
+                action: async () => {
+                    setEl('trx-state', "PREPARING", false, 'text-orange-400');
+                    spawnParticle('log-buffer', 'box-redolog', '#f97316');
+                    await delay(500);
+                    rotatePointer('ptr-write', 45, 95);
+                    highlight('state-prepare', 'orange');
+                    addLSN(512);
+                }
+            },
+            {
+                label: "2PC: 写入 Binlog",
+                desc: "执行器生成并写入 Binlog。",
+                tip: "Binlog 是逻辑日志，用于备份和主从复制。",
+                flowIds: ["flow-binlog"],
+                action: async () => {
+                    spawnParticle('log-buffer', 'binlog-file', '#22c55e');
+                    await delay(500);
+                    addBinlogEntry("UPDATE users SET name='xiaolin' WHERE id=1;");
+                    highlight('state-binlog', 'green');
+                }
+            },
+            {
+                label: "2PC: Commit 阶段",
+                desc: "Redo 标记为 Commit，事务完成。",
+                tip: "两阶段提交保证两套日志一致。",
+                flowIds: ["flow-redo"],
+                action: async () => {
+                    setEl('trx-state', "COMMITTED", false, 'text-green-400');
+                    highlight('state-commit', 'green');
+                    rotatePointer('ptr-write', 95, 120);
+                    addLSN(256);
+                }
+            },
+            {
+                label: "异步刷脏 (后台线程)",
+                desc: "后台线程刷脏页到磁盘并推进 Checkpoint。",
+                tip: "即便断电，Redo 落盘也可恢复数据页。",
+                flowIds: ["flow-disk"],
+                action: async () => {
+                    const light = document.getElementById('disk-io-light');
+                    light.classList.replace('bg-slate-700', 'bg-red-500');
+                    spawnParticle('page-1', 'disk-storage', '#ef4444');
+                    await delay(800);
+                    setEl('disk-val', "name: 'xiaolin'");
+                    document.getElementById('page-1').classList.remove('dirty-page');
+                    light.classList.replace('bg-red-500', 'bg-slate-700');
+                    rotatePointer('ptr-cp', 10, 80);
+                    addLSN(0);
+                }
+            }
+        ];
+
+        let currentStep = 0;
+        let lsn = 1024000;
+
+        function init() {
+            const list = document.getElementById('step-list');
+            steps.forEach((s, i) => {
+                const div = document.createElement('div');
+                div.id = `step-node-${i}`;
+                div.className = "step-node p-3 rounded-xl border border-slate-700 text-xs cursor-default flex gap-3 items-center";
+                div.innerHTML = `
+                    <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0 text-[10px]">${i+1}</span>
+                    <div class="flex-1">
+                        <div class="font-bold text-slate-300">${s.label}</div>
+                        <div class="text-[10px] text-slate-500">${s.desc}</div>
+                    </div>
+                    <span id="step-status-${i}" class="text-slate-500 text-[10px]">待执行</span>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function nextStep() {
+            if (currentStep >= steps.length) return;
+            
+            const btn = document.getElementById('next-btn');
+            btn.disabled = true;
+            
+            const step = steps[currentStep];
+            document.getElementById(`step-node-${currentStep}`).classList.add('active');
+            document.getElementById(`step-status-${currentStep}`).innerText = "执行中";
+            document.getElementById('current-step-label').innerText = step.label;
+            document.getElementById('current-step-desc').innerText = step.desc;
+            document.getElementById('tip-text').innerText = step.tip;
+            highlightFlow(step.flowIds);
+            updateProgress();
+            
+            await step.action();
+            
+            document.getElementById(`step-node-${currentStep}`).classList.replace('active', 'completed');
+            document.getElementById(`step-status-${currentStep}`).innerText = "完成";
+            currentStep++;
+            
+            if(currentStep === steps.length) {
+                btn.innerText = "演示完成";
+                highlightFlow([]);
+            } else {
+                btn.disabled = false;
+            }
+        }
+
+        // 辅助函数
+        function setEl(id, text, isHtml = false, colorClass = '') {
+            const el = document.getElementById(id);
+            if(!el) return;
+            if(isHtml) el.innerHTML = text;
+            else el.innerText = text;
+            if(colorClass) {
+                el.className = el.className.replace(/text-\w+-\d+/, '') + ' ' + colorClass;
+            }
+        }
+
+        function highlight(id, color) {
+            const el = document.getElementById(id);
+            if(!el) return;
+            const colors = {
+                blue: 'border-blue-500 bg-blue-900/40 shadow-[0_0_15px_rgba(59,130,246,0.3)]',
+                purple: 'border-purple-500 bg-purple-900/40',
+                orange: 'border-orange-500 bg-orange-900/40',
+                green: 'border-green-500 bg-green-900/40 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
+            };
+            el.className += ' ' + colors[color];
+        }
+
+        function highlightFlow(ids) {
+            const flowIds = ["flow-client", "flow-buffer", "flow-redo", "flow-binlog", "flow-disk"];
+            flowIds.forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (ids.includes(id)) el.classList.add('active');
+                else el.classList.remove('active');
+            });
+        }
+
+        function updateProgress() {
+            const bar = document.getElementById('progress-bar');
+            const percent = Math.min(((currentStep + 1) / steps.length) * 100, 100);
+            bar.style.width = `${percent}%`;
+        }
+
+        function spawnParticle(fromId, toId, color) {
+            const fromEl = document.getElementById(fromId);
+            const toEl = document.getElementById(toId);
+            if(!fromEl || !toEl) return;
+
+            const fromRect = fromEl.getBoundingClientRect();
+            const toRect = toEl.getBoundingClientRect();
+            
+            const p = document.createElement('div');
+            p.className = 'particle';
+            p.style.backgroundColor = color;
+            p.style.left = `${fromRect.left + fromRect.width/2}px`;
+            p.style.top = `${fromRect.top + fromRect.height/2}px`;
+            p.style.boxShadow = `0 0 10px ${color}`;
+            document.body.appendChild(p);
+            
+            setTimeout(() => {
+                p.style.left = `${toRect.left + toRect.width/2}px`;
+                p.style.top = `${toRect.top + toRect.height/2}px`;
+                p.style.transform = 'scale(0.5)';
+                p.style.opacity = '0';
+            }, 50);
+            
+            setTimeout(() => p.remove(), 1000);
+        }
+
+        function addRedoBuf(text) {
+            const container = document.getElementById('redo-buf-items');
+            if(container.innerText.includes('Empty')) container.innerHTML = '';
+            const div = document.createElement('div');
+            div.className = 'text-orange-400 border-l border-orange-800 pl-1';
+            div.innerText = `+ ${text}`;
+            container.prepend(div);
+        }
+
+        function addBinlogEntry(text) {
+            const container = document.getElementById('binlog-content');
+            const div = document.createElement('div');
+            div.className = 'text-green-500';
+            div.innerText = `[TRX_101] ${text}`;
+            container.appendChild(div);
+        }
+
+        function rotatePointer(id, start, end) {
+            const el = document.getElementById(id);
+            if(el) el.style.transform = `rotate(${end}deg)`;
+        }
+
+        function addLSN(val) {
+            lsn += val;
+            setEl('lsn-val', lsn);
+            setEl('page-lsn', `LSN: ${lsn}`);
+        }
+
+        function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        document.getElementById('next-btn').addEventListener('click', nextStep);
+        document.getElementById('reset-btn').addEventListener('click', () => location.reload());
+
+        window.onload = init;
+    </script>
+</body>
+</html>

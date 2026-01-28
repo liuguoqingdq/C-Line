@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MySQL 主从复制原理解析</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.5; }
+            100% { transform: scale(1.1); opacity: 0; }
+        }
+        .thread-active::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            background: rgba(59, 130, 246, 0.4);
+            border-radius: inherit;
+            animation: pulse-ring 1.5s infinite;
+        }
+        .flow-path {
+            stroke-dasharray: 8;
+            animation: dash 3s linear infinite;
+        }
+        @keyframes dash {
+            to { stroke-dashoffset: -48; }
+        }
+        .log-list::-webkit-scrollbar { width: 4px; }
+        .log-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans">
+
+<div class="min-h-screen p-4 md:p-8">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl font-bold text-slate-900 flex items-center justify-center gap-3">
+                <i data-lucide="refresh-cw" class="text-blue-600"></i>
+                MySQL 主从复制架构演示
+            </h1>
+            <p class="text-slate-500 mt-2">严格遵循 Binlog -> Dump -> I/O -> Relay Log -> SQL 线程的标准同步链路</p>
+        </header>
+
+        <!-- Main Diagram Area -->
+        <div class="relative grid grid-cols-1 lg:grid-cols-11 gap-4 items-stretch min-h-[600px]">
+            
+            <!-- MASTER NODE (3 cols) -->
+            <div class="lg:col-span-3 flex flex-col gap-6">
+                <div class="bg-white rounded-3xl p-6 border-2 border-blue-200 shadow-sm flex-1 flex flex-col relative">
+                    <div class="absolute -top-3 left-6 bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Master Node</div>
+                    
+                    <!-- Application / User -->
+                    <div class="mb-8 flex flex-col items-center">
+                        <div class="p-4 bg-slate-100 rounded-2xl border border-slate-200 w-full text-center">
+                            <i data-lucide="user" class="mx-auto mb-1 text-slate-400"></i>
+                            <div class="text-xs font-bold text-slate-500">应用程序 / 用户写入</div>
+                            <button onclick="writeToMaster()" class="mt-3 w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-100 transition-transform active:scale-95">
+                                执行 INSERT INTO...
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Master Database -->
+                    <div class="mb-8 flex flex-col items-center relative">
+                        <div class="p-6 bg-blue-50 rounded-2xl border-2 border-blue-200 w-32 h-32 flex flex-col items-center justify-center shadow-inner">
+                            <i data-lucide="database" class="w-10 h-10 text-blue-600 mb-1"></i>
+                            <span class="text-[10px] font-black text-blue-800">MASTER DB</span>
+                            <span id="masterRows" class="text-sm font-mono font-bold mt-1">Rows: 0</span>
+                        </div>
+                        <!-- Arrow to Binlog -->
+                        <div class="h-8 w-0.5 bg-blue-200 flex items-center justify-center">
+                            <i data-lucide="chevron-down" class="w-3 h-3 text-blue-300"></i>
+                        </div>
+                    </div>
+
+                    <!-- Binlog Storage -->
+                    <div class="bg-slate-800 rounded-2xl p-4 flex-1 flex flex-col">
+                        <div class="text-[9px] font-bold text-slate-400 mb-2 flex justify-between items-center">
+                            <span>BINARY LOGS (磁盘)</span>
+                            <i data-lucide="hard-drive" class="w-3 h-3"></i>
+                        </div>
+                        <div id="binlogList" class="log-list flex-1 overflow-y-auto space-y-1 pr-1">
+                            <!-- JS Inject -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TRANSFER LAYER (2 cols) -->
+            <div class="lg:col-span-2 flex flex-col items-center justify-center gap-12 relative">
+                <!-- Dump Thread -->
+                <div class="flex flex-col items-center gap-2">
+                    <div id="dumpThread" class="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center border-2 border-slate-300 text-slate-500 transition-all duration-300 relative">
+                        <i data-lucide="repeat" class="w-8 h-8"></i>
+                    </div>
+                    <span class="text-[10px] font-bold text-slate-500 text-center">Binlog Dump<br>Thread</span>
+                </div>
+
+                <!-- Network Pipe -->
+                <div class="w-full h-8 bg-slate-200 rounded-full relative overflow-hidden border border-slate-300 shadow-inner">
+                    <div id="packet" class="absolute top-1 left-0 w-6 h-6 bg-blue-500 rounded-lg flex items-center justify-center text-white opacity-0 transition-all duration-700 ease-linear shadow-md">
+                        <i data-lucide="package" class="w-4 h-4"></i>
+                    </div>
+                </div>
+
+                <div class="flex gap-4">
+                    <button id="toggleBtn" onclick="toggleReplication()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-[10px] font-bold shadow-md transition-colors flex items-center gap-2">
+                        <i data-lucide="play" class="w-3 h-3"></i> 开启同步
+                    </button>
+                </div>
+            </div>
+
+            <!-- SLAVE NODE (6 cols) -->
+            <div class="lg:col-span-6 flex flex-col gap-4">
+                <div class="bg-white rounded-3xl p-6 border-2 border-emerald-200 shadow-sm flex-1 relative flex flex-col md:flex-row gap-6">
+                    <div class="absolute -top-3 left-6 bg-emerald-600 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Slave Node</div>
+                    
+                    <!-- IO Side -->
+                    <div class="flex-1 flex flex-col gap-6">
+                        <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b pb-1">I/O 接收阶段</div>
+                        
+                        <div class="flex flex-col items-center gap-2">
+                            <div id="ioThread" class="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center border-2 border-slate-300 text-slate-500 transition-all duration-300 relative">
+                                <i data-lucide="download" class="w-8 h-8"></i>
+                            </div>
+                            <span class="text-[10px] font-bold text-slate-500">Slave I/O Thread</span>
+                        </div>
+
+                        <!-- Relay Log -->
+                        <div class="bg-slate-800 rounded-2xl p-4 h-48 flex flex-col">
+                            <div class="text-[9px] font-bold text-slate-400 mb-2 flex justify-between items-center">
+                                <span>RELAY LOG (中继日志)</span>
+                                <i data-lucide="archive" class="w-3 h-3"></i>
+                            </div>
+                            <div id="relaylogList" class="log-list flex-1 overflow-y-auto space-y-1 pr-1">
+                                <!-- JS Inject -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SQL Side -->
+                    <div class="flex-1 flex flex-col gap-6">
+                        <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b pb-1">SQL 执行阶段</div>
+
+                        <div class="flex flex-col items-center gap-2">
+                            <div id="sqlThread" class="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center border-2 border-slate-300 text-slate-500 transition-all duration-300 relative">
+                                <i data-lucide="play-circle" class="w-8 h-8"></i>
+                            </div>
+                            <span class="text-[10px] font-bold text-slate-500">Slave SQL Thread</span>
+                        </div>
+
+                        <!-- Slave DB -->
+                        <div class="p-6 bg-emerald-50 rounded-2xl border-2 border-emerald-200 flex-1 flex flex-col items-center justify-center shadow-inner relative overflow-hidden">
+                            <div class="absolute inset-0 opacity-10 flex items-center justify-center">
+                                <i data-lucide="database" class="w-24 h-24"></i>
+                            </div>
+                            <i data-lucide="database" class="w-12 h-12 text-emerald-600 mb-1 relative z-10"></i>
+                            <span class="text-[10px] font-black text-emerald-800 relative z-10">SLAVE DB</span>
+                            <span id="slaveRows" class="text-2xl font-black text-emerald-700 mt-2 relative z-10">0</span>
+                            <div id="syncBadge" class="mt-2 text-[9px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-500 font-bold relative z-10">STANDBY</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Event Monitor -->
+                <div class="bg-slate-900 rounded-2xl p-4 border-t-4 border-blue-500 shadow-xl min-h-[120px]">
+                    <div class="text-[9px] text-slate-500 font-bold uppercase mb-3 flex justify-between">
+                        <span>Replication Event Monitor</span>
+                        <div class="flex gap-1">
+                            <div class="w-1.5 h-1.5 rounded-full bg-red-500"></div>
+                            <div class="w-1.5 h-1.5 rounded-full bg-amber-500"></div>
+                            <div class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+                        </div>
+                    </div>
+                    <div id="consoleLogs" class="space-y-1.5 text-[10px] font-mono leading-tight">
+                        <div class="text-slate-500 italic">> 等待同步事件...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer Help -->
+        <div class="mt-8 bg-white rounded-2xl p-6 border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div class="space-y-2">
+                <div class="flex items-center gap-2 text-blue-600 font-bold text-sm">
+                    <i data-lucide="info" class="w-4 h-4"></i>
+                    <span>主库线程</span>
+                </div>
+                <p class="text-[11px] text-slate-500 leading-relaxed"><strong>Dump Thread:</strong> 当从库连接时，主库会创建一个线程，负责读取 Binlog 并在有新数据时推送给从库。</p>
+            </div>
+            <div class="space-y-2">
+                <div class="flex items-center gap-2 text-emerald-600 font-bold text-sm">
+                    <i data-lucide="info" class="w-4 h-4"></i>
+                    <span>从库线程</span>
+                </div>
+                <p class="text-[11px] text-slate-500 leading-relaxed"><strong>I/O Thread:</strong> 连接主库请求日志，并将接收到的内容按顺序写入本地的 Relay Log 中。</p>
+            </div>
+            <div class="space-y-2">
+                <div class="flex items-center gap-2 text-purple-600 font-bold text-sm">
+                    <i data-lucide="info" class="w-4 h-4"></i>
+                    <span>从库线程</span>
+                </div>
+                <p class="text-[11px] text-slate-500 leading-relaxed"><strong>SQL Thread:</strong> 负责读取 Relay Log，并将其中的 SQL 语句回放到 Slave DB 存储中。</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    lucide.createIcons();
+
+    let state = {
+        masterRows: 0,
+        slaveRows: 0,
+        isReplicating: false,
+        binlog: [],
+        relayLog: [],
+        queue: [],
+        isBusy: false
+    };
+
+    function addLog(msg, type = 'info') {
+        const container = document.getElementById('consoleLogs');
+        const colors = { info: 'text-blue-400', success: 'text-emerald-400', warn: 'text-amber-500', sys: 'text-slate-400' };
+        const entry = document.createElement('div');
+        const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        entry.innerHTML = `<span class="text-slate-600 mr-2">${time}</span><span class="${colors[type]}">${msg}</span>`;
+        if (container.children.length > 5) container.removeChild(container.firstChild);
+        container.appendChild(entry);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function toggleReplication() {
+        state.isReplicating = !state.isReplicating;
+        const btn = document.getElementById('toggleBtn');
+        const ioT = document.getElementById('ioThread');
+        const sqlT = document.getElementById('sqlThread');
+        const badge = document.getElementById('syncBadge');
+
+        if (state.isReplicating) {
+            btn.innerHTML = `<i data-lucide="pause" class="w-3 h-3"></i> 暂停同步`;
+            btn.classList.replace('bg-emerald-600', 'bg-red-600');
+            ioT.classList.add('thread-active', 'bg-blue-100', 'text-blue-600', 'border-blue-400');
+            sqlT.classList.add('thread-active', 'bg-emerald-100', 'text-emerald-600', 'border-emerald-400');
+            badge.innerText = 'CONNECTED';
+            badge.classList.replace('bg-slate-200', 'bg-emerald-100');
+            badge.classList.replace('text-slate-500', 'text-emerald-600');
+            addLog("主从连接建立，复制通道开启。", "success");
+            processQueue();
+        } else {
+            btn.innerHTML = `<i data-lucide="play" class="w-3 h-3"></i> 开启同步`;
+            btn.classList.replace('bg-red-600', 'bg-emerald-600');
+            ioT.classList.remove('thread-active', 'bg-blue-100', 'text-blue-600', 'border-blue-400');
+            sqlT.classList.remove('thread-active', 'bg-emerald-100', 'text-emerald-600', 'border-emerald-400');
+            badge.innerText = 'OFFLINE';
+            badge.classList.replace('bg-emerald-100', 'bg-slate-200');
+            badge.classList.replace('text-emerald-600', 'text-slate-500');
+            addLog("复制连接已断开。", "warn");
+        }
+        lucide.createIcons();
+    }
+
+    function updateLogUI(containerId, entry, color) {
+        const container = document.getElementById(containerId);
+        const div = document.createElement('div');
+        div.className = "flex items-center justify-between p-1.5 rounded bg-slate-700/50 border border-slate-600 text-[8px] animate-pulse";
+        div.innerHTML = `<span class="${color} font-bold">${entry.id}</span><span class="text-slate-400 truncate ml-2">LSN:${entry.lsn}</span>`;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+        setTimeout(() => div.classList.remove('animate-pulse'), 500);
+    }
+
+    async function writeToMaster() {
+        state.masterRows++;
+        document.getElementById('masterRows').innerText = `Rows: ${state.masterRows}`;
+        
+        const entryId = "0x" + Math.random().toString(16).substr(2, 4).toUpperCase();
+        const entry = { id: entryId, lsn: 1000 + state.masterRows * 16 };
+        
+        state.binlog.push(entry);
+        updateLogUI('binlogList', entry, 'text-blue-400');
+        addLog(`主库提交事务: ${entryId}`, "info");
+
+        if (state.isReplicating) {
+            state.queue.push(entry);
+            processQueue();
+        } else {
+            state.queue.push(entry);
+            addLog(`事务已记录 Binlog，等待传输。`, "sys");
+        }
+    }
+
+    async function processQueue() {
+        if (state.isBusy || !state.isReplicating || state.queue.length === 0) return;
+        state.isBusy = true;
+
+        const entry = state.queue.shift();
+        const dump = document.getElementById('dumpThread');
+        const packet = document.getElementById('packet');
+        const badge = document.getElementById('syncBadge');
+
+        // 1. Dump Thread Read
+        dump.classList.add('thread-active', 'bg-blue-500', 'text-white', 'border-blue-600');
+        addLog(`Dump 线程正在读取 ${entry.id}...`, "sys");
+        await new Promise(r => setTimeout(r, 600));
+
+        // 2. Network Transfer
+        packet.classList.remove('opacity-0');
+        packet.style.left = '0%';
+        await new Promise(r => setTimeout(r, 50));
+        packet.style.left = '80%';
+        await new Promise(r => setTimeout(r, 700));
+        packet.classList.add('opacity-0');
+        
+        dump.classList.remove('thread-active', 'bg-blue-500', 'text-white', 'border-blue-600');
+
+        // 3. IO Thread Write Relay Log
+        addLog(`I/O 线程接收数据，写入中继日志。`, "sys");
+        state.relayLog.push(entry);
+        updateLogUI('relaylogList', entry, 'text-emerald-400');
+        await new Promise(r => setTimeout(r, 400));
+
+        // 4. SQL Thread Execute
+        addLog(`SQL 线程回放事务 ${entry.id}...`, "info");
+        badge.innerText = 'APPLYING';
+        badge.classList.replace('bg-emerald-100', 'bg-amber-100');
+        badge.classList.replace('text-emerald-600', 'text-amber-600');
+        
+        await new Promise(r => setTimeout(r, 800));
+        
+        state.slaveRows++;
+        document.getElementById('slaveRows').innerText = state.slaveRows;
+        badge.innerText = 'SYNCED';
+        badge.classList.replace('bg-amber-100', 'bg-blue-100');
+        badge.classList.replace('text-amber-600', 'text-blue-600');
+        addLog(`同步成功: ${entry.id}`, "success");
+
+        setTimeout(() => {
+            if(state.isReplicating) {
+                badge.innerText = 'CONNECTED';
+                badge.classList.replace('bg-blue-100', 'bg-emerald-100');
+                badge.classList.replace('text-blue-600', 'text-emerald-600');
+            }
+        }, 1000);
+
+        state.isBusy = false;
+        processQueue();
+    }
+
+    window.onload = () => {
+        addLog("系统就绪。等待写入操作...", "sys");
+    };
+</script>
+
+</body>
+</html>

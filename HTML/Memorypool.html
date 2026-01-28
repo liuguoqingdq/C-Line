@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Pool Layout Visualization</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            overflow-x: hidden;
+        }
+        
+        /* 连线层 */
+        #svg-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .struct-box {
+            background-color: #252526;
+            border: 1px solid #454545;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: transform 0.2s;
+        }
+
+        .field-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 8px;
+            border-bottom: 1px solid #333;
+            font-size: 12px;
+        }
+        .field-row:last-child {
+            border-bottom: none;
+        }
+        
+        .field-name { color: #9cdcfe; }
+        .field-type { color: #569cd6; margin-right: 8px; }
+        .field-value { color: #b5cea8; }
+
+        .ptr-point {
+            width: 8px;
+            height: 8px;
+            background-color: #dcdcaa;
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 5px;
+            cursor: crosshair;
+        }
+
+        /* Chunk Styles */
+        .chunk-container {
+            border: 2px dashed #007acc;
+            padding: 10px;
+            background: rgba(0, 122, 204, 0.05);
+            margin-bottom: 40px;
+            position: relative;
+        }
+        
+        /* Node Styles */
+        .node-box {
+            width: 160px;
+            margin: 5px;
+            position: relative;
+        }
+        .node-free {
+            border-color: #4ec9b0;
+        }
+        .node-used {
+            border-color: #ce9178;
+            opacity: 0.7;
+        }
+
+        .storage-area {
+            background: #333;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #808080;
+            font-size: 10px;
+            font-style: italic;
+        }
+        
+        /* Legend */
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-right: 15px;
+            font-size: 12px;
+        }
+        .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+
+    </style>
+</head>
+<body class="min-h-screen relative p-8">
+
+    <!-- SVG Layer for arrows -->
+    <svg id="svg-layer"></svg>
+
+    <!-- Header / Legend -->
+    <div class="fixed top-4 right-4 bg-gray-800 p-4 rounded shadow-lg border border-gray-700 z-50 opacity-90">
+        <h3 class="font-bold text-white mb-2 border-b border-gray-600 pb-1">图例 (Legend)</h3>
+        <div class="legend-item"><div class="dot bg-blue-500"></div> Chunk Link (next_chunk)</div>
+        <div class="legend-item"><div class="dot bg-green-400"></div> Free List (next_free)</div>
+        <div class="legend-item"><div class="dot border border-gray-500 bg-[#252526]"></div> Chunk Header</div>
+        <div class="legend-item"><div class="dot border border-[#4ec9b0] bg-[#252526]"></div> Free Node</div>
+        <div class="legend-item"><div class="dot border border-[#ce9178] bg-[#252526]"></div> Used Node</div>
+    </div>
+
+    <!-- Title -->
+    <div class="mb-10">
+        <h1 class="text-2xl font-bold text-white mb-2">Memory Pool Visualizer</h1>
+        <p class="text-gray-400 text-sm max-w-2xl">
+            可视化展示 struct Chunk 与 struct Node 的内存布局。
+            <br>
+            注意：Nodes 在内存中紧跟 Chunk Header 之后。Free List 穿插在不同的 Chunk 中。
+        </p>
+    </div>
+
+    <!-- Global Pointers Area -->
+    <div class="flex gap-12 mb-16 ml-10">
+        <!-- Static s_chunks -->
+        <div class="struct-box w-64 z-20" id="global-chunks">
+            <div class="bg-gray-700 text-white px-2 py-1 text-xs font-bold border-b border-gray-600">static global</div>
+            <div class="field-row">
+                <div><span class="field-type">Chunk*</span> <span class="field-name">s_chunks</span></div>
+                <div class="ptr-point bg-blue-500" id="ptr-s-chunks"></div>
+            </div>
+        </div>
+
+        <!-- Static s_free_list -->
+        <div class="struct-box w-64 z-20" id="global-freelist">
+            <div class="bg-gray-700 text-white px-2 py-1 text-xs font-bold border-b border-gray-600">static global</div>
+            <div class="field-row">
+                <div><span class="field-type">Node*</span> <span class="field-name">s_free_list</span></div>
+                <div class="ptr-point bg-green-400" id="ptr-s-freelist"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Memory Area -->
+    <div id="heap-container" class="flex flex-col gap-8 ml-10">
+        <!-- Content generated by JS -->
+    </div>
+
+    <script>
+        // --- Mock Data ---
+        // 模拟两个 Chunk，每个 Chunk 有若干个 Node
+        // 状态：
+        // Chunk 1: Node 0 (Free), Node 1 (Used), Node 2 (Free)
+        // Chunk 2: Node 0 (Used), Node 1 (Free)
+        // Free List 顺序: Chunk2_Node1 -> Chunk1_Node0 -> Chunk1_Node2 -> NULL
+        
+        const chunks = [
+            {
+                id: 'chunk-1',
+                address: '0x1000',
+                capacity: 3,
+                live: 1,
+                nextChunkId: 'chunk-2',
+                nodes: [
+                    { id: 'c1-n0', index: 0, isFree: true, nextFreeId: 'c1-n2' },
+                    { id: 'c1-n1', index: 1, isFree: false, nextFreeId: null }, // Used
+                    { id: 'c1-n2', index: 2, isFree: true, nextFreeId: null }   // Tail
+                ]
+            },
+            {
+                id: 'chunk-2',
+                address: '0x2000',
+                capacity: 2,
+                live: 1,
+                nextChunkId: null, // End of chunk list
+                nodes: [
+                    { id: 'c2-n0', index: 0, isFree: false, nextFreeId: null }, // Used
+                    { id: 'c2-n1', index: 1, isFree: true, nextFreeId: 'c1-n0' } // Head of free list points here first
+                ]
+            }
+        ];
+
+        const globals = {
+            s_chunks_target: 'chunk-1',
+            s_free_list_target: 'c2-n1' // The head of the free list
+        };
+
+        // --- Render Functions ---
+
+        function render() {
+            const container = document.getElementById('heap-container');
+            
+            chunks.forEach(chunk => {
+                // 1. Create Chunk Container
+                const chunkEl = document.createElement('div');
+                chunkEl.className = 'chunk-container flex flex-row items-start';
+                chunkEl.id = chunk.id;
+
+                // 2. Create Chunk Header Box (The struct Chunk)
+                const headerHtml = `
+                    <div class="struct-box w-56 mr-4 shrink-0 relative z-20" id="${chunk.id}-header">
+                        <div class="bg-[#007acc] text-white px-2 py-1 text-xs font-bold">struct Chunk @${chunk.address}</div>
+                        <div class="field-row">
+                            <div><span class="field-type">Chunk*</span> <span class="field-name">next_chunk</span></div>
+                            <div class="ptr-point bg-blue-500" id="ptr-${chunk.id}-next"></div>
+                        </div>
+                        <div class="field-row">
+                            <div><span class="field-type">size_t</span> <span class="field-name">capacity</span></div>
+                            <span class="field-value">${chunk.capacity}</span>
+                        </div>
+                        <div class="field-row">
+                            <div><span class="field-type">size_t</span> <span class="field-name">live</span></div>
+                            <span class="field-value">${chunk.live}</span>
+                        </div>
+                        <div class="field-row">
+                            <div><span class="field-type">Node*</span> <span class="field-name">nodes</span></div>
+                            <div class="text-[10px] text-gray-500">(Implicit +1)</div>
+                        </div>
+                    </div>
+                `;
+
+                // 3. Create Nodes Area (The array of Nodes)
+                let nodesHtml = '<div class="flex flex-wrap gap-2 items-start border-l-2 border-dashed border-gray-600 pl-4">';
+                chunk.nodes.forEach(node => {
+                    const statusClass = node.isFree ? 'node-free' : 'node-used';
+                    const titleColor = node.isFree ? 'bg-[#4ec9b0] text-black' : 'bg-[#ce9178] text-white';
+                    const nextFreeVisibility = node.isFree ? '' : 'opacity-20 grayscale'; // Dim next_free for used nodes
+                    
+                    nodesHtml += `
+                        <div class="struct-box node-box ${statusClass} z-20" id="${node.id}">
+                            <div class="${titleColor} px-2 py-1 text-xs font-bold flex justify-between">
+                                <span>Node [${node.index}]</span>
+                                <span class="opacity-70">${node.isFree ? 'FREE' : 'USED'}</span>
+                            </div>
+                            <!-- next_free -->
+                            <div class="field-row ${nextFreeVisibility}">
+                                <div><span class="field-type text-[10px]">Node*</span> <span class="field-name text-[10px]">next_free</span></div>
+                                ${node.isFree ? `<div class="ptr-point bg-green-400" id="ptr-${node.id}-next"></div>` : '<span class="text-[10px] text-gray-500">X</span>'}
+                            </div>
+                            <!-- owner -->
+                            <div class="field-row">
+                                <div><span class="field-type text-[10px]">Chunk*</span> <span class="field-name text-[10px]">owner</span></div>
+                                <span class="text-[10px] text-gray-500">@${chunk.address}</span>
+                            </div>
+                            <!-- storage -->
+                            <div class="storage-area border-t border-gray-600 mt-1">
+                                unsigned char storage[T]
+                            </div>
+                        </div>
+                    `;
+                });
+                nodesHtml += '</div>';
+
+                chunkEl.innerHTML = headerHtml + nodesHtml;
+                container.appendChild(chunkEl);
+            });
+
+            // After DOM is built, draw lines
+            setTimeout(drawLines, 100);
+            window.addEventListener('resize', drawLines);
+        }
+
+        function drawLines() {
+            const svg = document.getElementById('svg-layer');
+            svg.innerHTML = ''; // Clear previous lines
+
+            // Helper to add line
+            const createLine = (startId, endId, color, type = 'solid') => {
+                const startEl = document.getElementById(startId);
+                let endEl = document.getElementById(endId);
+                
+                if (!startEl) return;
+
+                // 如果目标是 Chunk，则指向它的 Header
+                if (endId.startsWith('chunk-')) {
+                    endEl = document.getElementById(endId + '-header');
+                }
+
+                if (!endEl) return;
+
+                const startRect = startEl.getBoundingClientRect();
+                const endRect = endEl.getBoundingClientRect();
+
+                // Calculate connection points relative to page
+                // Start from center of the dot
+                const x1 = startRect.left + startRect.width / 2 + window.scrollX;
+                const y1 = startRect.top + startRect.height / 2 + window.scrollY;
+                
+                // End at the left-center of the target box
+                const x2 = endRect.left + window.scrollX;
+                const y2 = endRect.top + endRect.height / 2 + window.scrollY;
+
+                // Bezier curve control points
+                const c1x = x1 + 50;
+                const c1y = y1;
+                const c2x = x2 - 50;
+                const c2y = y2;
+
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                const d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
+                
+                path.setAttribute("d", d);
+                path.setAttribute("stroke", color);
+                path.setAttribute("stroke-width", "2");
+                path.setAttribute("fill", "none");
+                
+                if (type === 'dashed') {
+                    path.setAttribute("stroke-dasharray", "5,5");
+                }
+                
+                // Marker
+                const markerId = `arrowhead-${color.replace('#','')}`;
+                path.setAttribute("marker-end", `url(#${markerId})`);
+                
+                svg.appendChild(path);
+            };
+
+            // Define Markers
+            const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+            ['#3b82f6', '#4ade80'].forEach(color => {
+                const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+                marker.setAttribute("id", `arrowhead-${color.replace('#','')}`);
+                marker.setAttribute("markerWidth", "10");
+                marker.setAttribute("markerHeight", "7");
+                marker.setAttribute("refX", "9");
+                marker.setAttribute("refY", "3.5");
+                marker.setAttribute("orient", "auto");
+                const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+                polygon.setAttribute("points", "0 0, 10 3.5, 0 7");
+                polygon.setAttribute("fill", color);
+                marker.appendChild(polygon);
+                defs.appendChild(marker);
+            });
+            svg.appendChild(defs);
+
+            // 1. Draw Global s_chunks -> First Chunk
+            createLine('ptr-s-chunks', globals.s_chunks_target, '#3b82f6');
+
+            // 2. Draw Chunk -> Next Chunk
+            chunks.forEach(chunk => {
+                if (chunk.nextChunkId) {
+                    createLine(`ptr-${chunk.id}-next`, chunk.nextChunkId, '#3b82f6');
+                }
+            });
+
+            // 3. Draw Global s_free_list -> First Free Node
+            createLine('ptr-s-freelist', globals.s_free_list_target, '#4ade80');
+
+            // 4. Draw Node -> Next Node (Free List Chain)
+            chunks.forEach(chunk => {
+                chunk.nodes.forEach(node => {
+                    if (node.isFree && node.nextFreeId) {
+                        createLine(`ptr-${node.id}-next`, node.nextFreeId, '#4ade80');
+                    }
+                });
+            });
+        }
+
+        // Run
+        render();
+
+    </script>
+</body>
+</html>

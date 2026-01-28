@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL JOIN Internals: SNLJ vs INLJ</title>
+    <!-- React & Tailwind -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; }
+        .table-row-item { transition: all 0.2s; }
+        .highlight-outer { background-color: #dbeafe; border-color: #3b82f6; transform: scale(1.02); }
+        .highlight-inner-scan { background-color: #ffedd5; border-color: #f97316; }
+        .highlight-match { background-color: #dcfce7; border-color: #22c55e; font-weight: bold; }
+        .highlight-index { background-color: #f3e8ff; border-color: #9333ea; box-shadow: 0 0 10px rgba(147, 51, 234, 0.3); }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- Icons Definitions (Manual implementation to avoid CDN issues) ---
+        const IconBase = ({ size = 24, className = "", children }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {children}
+            </svg>
+        );
+
+        const Play = (props) => <IconBase {...props}><polygon points="5 3 19 12 5 21 5 3" /></IconBase>;
+        const Pause = (props) => <IconBase {...props}><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></IconBase>;
+        const RotateCcw = (props) => <IconBase {...props}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></IconBase>;
+        const Database = (props) => <IconBase {...props}><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5V19A9 3 0 0 0 21 19V5" /><path d="M3 12A9 3 0 0 0 21 12" /></IconBase>;
+        const Search = (props) => <IconBase {...props}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></IconBase>;
+        const ArrowRight = (props) => <IconBase {...props}><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></IconBase>;
+        const Table = (props) => <IconBase {...props}><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /><line x1="12" y1="3" x2="12" y2="21" /></IconBase>;
+        const Binary = (props) => <IconBase {...props}><rect x="14" y="14" width="4" height="6" rx="2" /><rect x="6" y="4" width="4" height="6" rx="2" /><path d="M6 20h4" /><path d="M14 10h4" /><path d="M6 14h2v6" /><path d="M14 4h2v6" /></IconBase>;
+        const Zap = (props) => <IconBase {...props}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></IconBase>;
+
+
+        // --- Mock Data Generation ---
+        const generateData = (count, maxKey) => {
+            return Array.from({ length: count }, (_, i) => ({
+                id: i + 1,
+                key: Math.floor(Math.random() * maxKey) + 1, // Join Key
+                payload: ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)] + (i+1)
+            }));
+        };
+
+        const JoinSimulator = () => {
+            // --- Configuration ---
+            const [algo, setAlgo] = useState('SNLJ'); // 'SNLJ' | 'INLJ'
+            const [tableASize, setTableASize] = useState(4);
+            const [tableBSize, setTableBSize] = useState(10);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(800); // ms per step
+
+            // --- Data State ---
+            // Re-generate data only when config changes
+            const [tableA, setTableA] = useState([]);
+            const [tableB, setTableB] = useState([]);
+            const [indexB, setIndexB] = useState({}); // Key -> [RowIndices]
+
+            useEffect(() => {
+                const a = generateData(tableASize, 5); // Keys 1-5
+                // Ensure some matches by using overlapping key range
+                const b = generateData(tableBSize, 5); 
+                
+                // Build Index for B
+                const idx = {};
+                b.forEach((row, i) => {
+                    if (!idx[row.key]) idx[row.key] = [];
+                    idx[row.key].push(i);
+                });
+
+                setTableA(a);
+                setTableB(b);
+                setIndexB(idx);
+                resetSimulation();
+            }, [tableASize, tableBSize]);
+
+            // --- Execution State ---
+            const [stepState, setStepState] = useState('INIT'); 
+            // INIT, OUTER_FETCH, INNER_SCAN (SNLJ), INDEX_LOOKUP (INLJ), TABLE_LOOKUP (INLJ), MATCH, FINISHED
+            
+            const [pointers, setPointers] = useState({
+                outer: -1,
+                inner: -1, // for SNLJ scan
+                matchCandidates: [], // for INLJ [b_index, b_index...]
+                currentMatchIdx: -1 // pointer within matchCandidates
+            });
+
+            const [stats, setStats] = useState({
+                outerRead: 0,
+                innerScan: 0, // SNLJ
+                comparisons: 0,
+                indexLookups: 0, // INLJ
+                tableLookups: 0, // INLJ (Row Fetch)
+                matches: 0
+            });
+
+            const [results, setResults] = useState([]);
+            const [logs, setLogs] = useState(["准备就绪，点击开始运行..."]);
+
+            // --- Refs for Animation Lines ---
+            const containerRef = useRef(null);
+            const rowRefsA = useRef({});
+            const rowRefsB = useRef({});
+            const indexRef = useRef(null);
+            const [svgLines, setSvgLines] = useState([]);
+
+            // --- Reset ---
+            const resetSimulation = () => {
+                setIsPlaying(false);
+                setStepState('INIT');
+                setPointers({ outer: -1, inner: -1, matchCandidates: [], currentMatchIdx: -1 });
+                setStats({ outerRead: 0, innerScan: 0, comparisons: 0, indexLookups: 0, tableLookups: 0, matches: 0 });
+                setResults([]);
+                setLogs(["状态重置完成。"]);
+                setSvgLines([]);
+            };
+
+            // --- Algorithm Logic Engine ---
+            const nextStep = () => {
+                let nextPointers = { ...pointers };
+                let nextStats = { ...stats };
+                let nextLog = "";
+                let nextState = stepState;
+
+                // 1. SIMPLE NESTED LOOP JOIN (SNLJ)
+                if (algo === 'SNLJ') {
+                    switch (stepState) {
+                        case 'INIT':
+                        case 'FINISHED':
+                            nextState = 'OUTER_FETCH';
+                            nextPointers.outer = 0;
+                            nextPointers.inner = -1;
+                            nextLog = `[Step 1] 初始化：指针指向驱动表 A 第一行`;
+                            break;
+
+                        case 'OUTER_FETCH':
+                            if (nextPointers.outer >= tableA.length) {
+                                nextState = 'FINISHED';
+                                nextLog = `[Finish] A 表扫描结束，JOIN 完成。`;
+                            } else {
+                                nextStats.outerRead++;
+                                nextState = 'INNER_SCAN';
+                                nextPointers.inner = 0; // Reset inner pointer
+                                nextLog = `[Step 2] 读取驱动表 A 行 (id=${tableA[nextPointers.outer].id}, k=${tableA[nextPointers.outer].key})`;
+                            }
+                            break;
+
+                        case 'INNER_SCAN':
+                            if (nextPointers.inner >= tableB.length) {
+                                // Inner scan done, move to next outer
+                                nextState = 'OUTER_FETCH';
+                                nextPointers.outer++;
+                                nextLog = `[Step 4] B 表全表扫描完毕，回到 A 表取下一行`;
+                            } else {
+                                const rowA = tableA[nextPointers.outer];
+                                const rowB = tableB[nextPointers.inner];
+                                
+                                nextStats.innerScan++;
+                                nextStats.comparisons++;
+                                
+                                if (rowA.key === rowB.key) {
+                                    nextState = 'MATCH_FOUND';
+                                    nextStats.matches++;
+                                    setResults(prev => [...prev, { a: rowA, b: rowB }]);
+                                    nextLog = `[Step 3] 命中！A.k(${rowA.key}) == B.k(${rowB.key})，写入结果集`;
+                                } else {
+                                    // No match, just advance
+                                    nextPointers.inner++;
+                                    nextLog = `[Scanning] 比较 A(id:${rowA.id}) 与 B(id:${rowB.id})... 不匹配`;
+                                }
+                            }
+                            break;
+
+                        case 'MATCH_FOUND':
+                            // Resume scanning
+                            nextPointers.inner++;
+                            nextState = 'INNER_SCAN';
+                            nextLog = `[Continue] 继续扫描 B 表后续行...`;
+                            break;
+                    }
+                } 
+                // 2. INDEX NESTED LOOP JOIN (INLJ)
+                else {
+                    switch (stepState) {
+                        case 'INIT':
+                        case 'FINISHED':
+                            nextState = 'OUTER_FETCH';
+                            nextPointers.outer = 0;
+                            nextLog = `[Step 1] 初始化：指针指向驱动表 A 第一行`;
+                            break;
+
+                        case 'OUTER_FETCH':
+                            if (nextPointers.outer >= tableA.length) {
+                                nextState = 'FINISHED';
+                                nextLog = `[Finish] A 表扫描结束，JOIN 完成。`;
+                            } else {
+                                nextStats.outerRead++;
+                                nextState = 'INDEX_LOOKUP';
+                                nextLog = `[Step 2] 读取 A 行 (k=${tableA[nextPointers.outer].key})，准备查索引`;
+                            }
+                            break;
+
+                        case 'INDEX_LOOKUP':
+                            const key = tableA[nextPointers.outer].key;
+                            const matches = indexB[key] || []; // List of B indices
+                            nextStats.indexLookups++;
+                            
+                            if (matches.length > 0) {
+                                nextState = 'TABLE_LOOKUP';
+                                nextPointers.matchCandidates = matches; // Store all pointer hits
+                                nextPointers.currentMatchIdx = 0; // Start with first match
+                                nextLog = `[Index Lookup] 索引命中！Key=${key} 找到 ${matches.length} 个指针 (RowIDs: ${matches.map(i => tableB[i].id).join(',')})`;
+                            } else {
+                                nextState = 'OUTER_FETCH';
+                                nextPointers.outer++;
+                                nextLog = `[Index Lookup] 索引无匹配 (Key=${key})，跳过回表，处理下一行`;
+                            }
+                            break;
+
+                        case 'TABLE_LOOKUP':
+                            const bIdx = nextPointers.matchCandidates[nextPointers.currentMatchIdx];
+                            const rowA = tableA[nextPointers.outer];
+                            const rowB = tableB[bIdx];
+                            
+                            nextStats.tableLookups++;
+                            nextStats.matches++;
+                            setResults(prev => [...prev, { a: rowA, b: rowB }]);
+                            
+                            // Check if there are more matches for this key
+                            if (nextPointers.currentMatchIdx < nextPointers.matchCandidates.length - 1) {
+                                nextPointers.currentMatchIdx++;
+                                // Stay in TABLE_LOOKUP but log next
+                                nextLog = `[Table Lookup] 回表取数据 (B.id=${rowB.id})，加入结果。继续处理下一个索引指针...`;
+                            } else {
+                                // Done with this A row
+                                nextState = 'OUTER_FETCH';
+                                nextPointers.outer++;
+                                nextLog = `[Table Lookup] 回表取数据 (B.id=${rowB.id})，加入结果。当前 A 行处理完毕。`;
+                            }
+                            break;
+                    }
+                }
+
+                setStepState(nextState);
+                setPointers(nextPointers);
+                setStats(nextStats);
+                setLogs(prev => [nextLog, ...prev].slice(0, 5));
+            };
+
+            // --- Animation Loop ---
+            useEffect(() => {
+                let timer;
+                if (isPlaying && stepState !== 'FINISHED') {
+                    timer = setTimeout(nextStep, speed);
+                } else if (stepState === 'FINISHED') {
+                    setIsPlaying(false);
+                }
+                return () => clearTimeout(timer);
+            }, [isPlaying, stepState, pointers, stats, speed]);
+
+            // --- Drawing Lines (SVG) ---
+            useEffect(() => {
+                if (!containerRef.current) return;
+                
+                const lines = [];
+                const containerRect = containerRef.current.getBoundingClientRect();
+                
+                const getPos = (element) => {
+                    if (!element) return { x: 0, y: 0 };
+                    const rect = element.getBoundingClientRect();
+                    return {
+                        x: rect.left - containerRect.left + rect.width / 2,
+                        y: rect.top - containerRect.top + rect.height / 2,
+                        right: rect.right - containerRect.left,
+                        left: rect.left - containerRect.left
+                    };
+                };
+
+                const elA = rowRefsA.current[pointers.outer];
+                
+                if (algo === 'SNLJ' && stepState !== 'INIT' && stepState !== 'FINISHED') {
+                    // Line from A to B (current scanning row)
+                    const elB = rowRefsB.current[pointers.inner];
+                    if (elA && elB && stepState !== 'OUTER_FETCH') {
+                        const posA = getPos(elA);
+                        const posB = getPos(elB);
+                        lines.push({
+                            x1: posA.right, y1: posA.y,
+                            x2: posB.left, y2: posB.y,
+                            color: stepState === 'MATCH_FOUND' ? '#22c55e' : '#f97316',
+                            width: stepState === 'MATCH_FOUND' ? 4 : 2,
+                            dash: stepState === 'MATCH_FOUND' ? '' : '5,5'
+                        });
+                    }
+                } else if (algo === 'INLJ' && stepState !== 'INIT' && stepState !== 'FINISHED') {
+                    // 1. Line from A to Index
+                    const elIndex = indexRef.current;
+                    if (elA && elIndex && stepState !== 'OUTER_FETCH') {
+                        const posA = getPos(elA);
+                        const posIdx = getPos(elIndex);
+                        lines.push({
+                            x1: posA.right, y1: posA.y,
+                            x2: posIdx.left + 20, y2: posIdx.y, // Rough center
+                            color: '#9333ea', width: 2
+                        });
+                    }
+                    // 2. Line from Index to B (Table Lookup)
+                    if (stepState === 'TABLE_LOOKUP') {
+                        const bIdx = pointers.matchCandidates[pointers.currentMatchIdx];
+                        const elB = rowRefsB.current[bIdx];
+                        if (elIndex && elB) {
+                            const posIdx = getPos(elIndex);
+                            const posB = getPos(elB);
+                            lines.push({
+                                x1: posIdx.right - 20, y1: posIdx.y,
+                                x2: posB.left, y2: posB.y,
+                                color: '#22c55e', width: 3
+                            });
+                        }
+                    }
+                }
+
+                setSvgLines(lines);
+
+            }, [pointers, stepState, algo, tableA, tableB]);
+
+
+            return (
+                <div className="flex flex-col min-h-screen max-w-7xl mx-auto p-4 gap-4">
+                    {/* Header & Controls */}
+                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                <Database className="text-blue-600" /> 
+                                SQL JOIN 原理演示
+                            </h1>
+                            <p className="text-sm text-slate-500">
+                                {algo === 'SNLJ' ? 'Simple Nested-Loop Join (简单嵌套循环)' : 'Index Nested-Loop Join (索引嵌套循环)'}
+                            </p>
+                        </div>
+
+                        <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                            <span className={`text-sm font-bold ${algo === 'SNLJ' ? 'text-blue-600' : 'text-slate-400'}`}>SNLJ (无索引)</span>
+                            <button 
+                                onClick={() => { setAlgo(a => a === 'SNLJ' ? 'INLJ' : 'SNLJ'); resetSimulation(); }}
+                                className={`w-12 h-6 rounded-full p-1 transition-colors ${algo === 'INLJ' ? 'bg-purple-600' : 'bg-slate-300'}`}
+                            >
+                                <div className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform ${algo === 'INLJ' ? 'translate-x-6' : ''}`}></div>
+                            </button>
+                            <span className={`text-sm font-bold ${algo === 'INLJ' ? 'text-purple-600' : 'text-slate-400'}`}>INLJ (有索引)</span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => setIsPlaying(!isPlaying)} className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                                {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+                            </button>
+                            <button onClick={resetSimulation} className="p-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition">
+                                <RotateCcw size={20} />
+                            </button>
+                            <div className="flex flex-col ml-4 w-32">
+                                <label className="text-xs text-slate-500">速度</label>
+                                <input type="range" min="100" max="1500" step="100" value={speed} onChange={e => setSpeed(Number(e.target.value))} className="h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer" />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Stats Panel */}
+                    <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                        <StatCard label="Outer Rows Read" value={stats.outerRead} icon={<ArrowRight size={14}/>} />
+                        {algo === 'SNLJ' && <StatCard label="Inner Rows Scanned" value={stats.innerScan} color="orange" icon={<Search size={14}/>} />}
+                        {algo === 'SNLJ' && <StatCard label="Comparisons" value={stats.comparisons} color="red" icon={<Zap size={14}/>} />}
+                        {algo === 'INLJ' && <StatCard label="Index Lookups" value={stats.indexLookups} color="purple" icon={<Binary size={14}/>} />}
+                        {algo === 'INLJ' && <StatCard label="Table Lookups (回表)" value={stats.tableLookups} color="pink" icon={<Table size={14}/>} />}
+                        <StatCard label="Total Matches" value={stats.matches} color="green" />
+                    </div>
+
+                    {/* Main Stage */}
+                    <div className="flex-1 min-h-[600px] flex gap-8 relative bg-white rounded-xl shadow-inner border border-slate-200 p-6" ref={containerRef}>
+                        
+                        {/* SVG Layer for connecting lines */}
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+                            <defs>
+                                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                                    <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+                                </marker>
+                            </defs>
+                            {svgLines.map((line, i) => (
+                                <line 
+                                    key={i}
+                                    x1={line.x1} y1={line.y1}
+                                    x2={line.x2} y2={line.y2}
+                                    stroke={line.color}
+                                    strokeWidth={line.width}
+                                    strokeDasharray={line.dash}
+                                />
+                            ))}
+                        </svg>
+
+                        {/* Outer Table A */}
+                        <div className="w-48 flex flex-col gap-2 z-20">
+                            <div className="font-bold text-center text-blue-700 bg-blue-50 p-2 rounded border border-blue-200">
+                                驱动表 A (Outer)
+                                <div className="text-xs font-normal text-slate-500">N = {tableASize}</div>
+                            </div>
+                            {tableA.map((row, i) => (
+                                <div 
+                                    key={row.id} 
+                                    ref={el => rowRefsA.current[i] = el}
+                                    className={`table-row-item p-3 border rounded shadow-sm flex justify-between items-center bg-white 
+                                        ${i === pointers.outer ? 'highlight-outer' : 'border-slate-200'}
+                                    `}
+                                >
+                                    <span className="text-xs text-slate-400">#{row.id}</span>
+                                    <span className="font-mono font-bold text-slate-700">K: {row.key}</span>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Middle Area: Algo Description or Index */}
+                        <div className="flex-1 flex flex-col items-center justify-center z-20">
+                            {algo === 'INLJ' && (
+                                <div ref={indexRef} className={`w-48 transition-all p-4 border-2 rounded-xl text-center bg-white mb-4 ${stepState === 'INDEX_LOOKUP' ? 'highlight-index' : 'border-purple-200'}`}>
+                                    <div className="font-bold text-purple-700 mb-2 flex items-center justify-center gap-2">
+                                        <Binary size={16}/> Index(B.key)
+                                    </div>
+                                    <div className="text-xs text-left space-y-1 font-mono bg-slate-50 p-2 rounded h-40 overflow-y-auto">
+                                        {Object.entries(indexB).map(([k, idxs]) => (
+                                            <div key={k} className={`${stepState === 'INDEX_LOOKUP' && tableA[pointers.outer]?.key == k ? 'bg-purple-200 font-bold' : ''}`}>
+                                                K:{k} → [{idxs.map(i => `row${i}`).join(',')}]
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="text-xs text-purple-500 mt-2">
+                                        B+Tree 查找 O(log M)
+                                    </div>
+                                </div>
+                            )}
+                            
+                            <div className="bg-slate-800 text-white p-4 rounded-lg shadow-lg max-w-sm w-full opacity-90">
+                                <div className="text-xs font-bold text-slate-400 uppercase mb-1">Execution Log</div>
+                                <div className="font-mono text-sm h-24 overflow-hidden flex flex-col gap-1">
+                                    {logs.map((log, i) => (
+                                        <div key={i} className={i===0 ? "text-yellow-300 font-bold" : "text-slate-400"}>
+                                            {i===0 ? "> " : "  "}{log}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Inner Table B */}
+                        <div className="w-48 flex flex-col gap-2 z-20">
+                            <div className="font-bold text-center text-orange-700 bg-orange-50 p-2 rounded border border-orange-200">
+                                被驱动表 B (Inner)
+                                <div className="text-xs font-normal text-slate-500">M = {tableBSize}</div>
+                            </div>
+                            {tableB.map((row, i) => {
+                                let isScan = algo === 'SNLJ' && i === pointers.inner;
+                                let isMatch = stepState === 'MATCH_FOUND' || stepState === 'TABLE_LOOKUP';
+                                // In INLJ match state, we highlight specific row
+                                let isTarget = false;
+                                if (algo === 'INLJ' && isMatch) {
+                                    const bIdx = pointers.matchCandidates[pointers.currentMatchIdx];
+                                    isTarget = i === bIdx;
+                                }
+                                if (algo === 'SNLJ' && stepState === 'MATCH_FOUND' && i === pointers.inner) {
+                                    isTarget = true;
+                                }
+
+                                return (
+                                    <div 
+                                        key={row.id} 
+                                        ref={el => rowRefsB.current[i] = el}
+                                        className={`table-row-item p-3 border rounded shadow-sm flex justify-between items-center bg-white
+                                            ${isScan ? 'highlight-inner-scan' : ''}
+                                            ${isTarget ? 'highlight-match' : 'border-slate-200'}
+                                        `}
+                                    >
+                                        <span className="font-mono font-bold text-slate-700">K: {row.key}</span>
+                                        <span className="text-xs text-slate-400">payload...</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Result Area */}
+                    <div className="h-32 bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-col">
+                        <div className="font-bold text-slate-700 mb-2 flex items-center gap-2">
+                            <Table size={16}/> Result Set (Matches: {results.length})
+                        </div>
+                        <div className="flex-1 overflow-x-auto flex gap-2 items-center px-2 bg-slate-50 rounded border border-slate-100">
+                            {results.length === 0 && <span className="text-slate-400 text-sm">Waiting for matches...</span>}
+                            {results.map((res, i) => (
+                                <div key={i} className="min-w-[120px] bg-white border border-green-200 p-2 rounded shadow-sm text-xs animate-in fade-in zoom-in duration-300">
+                                    <div className="font-bold text-green-700">MATCH #{i+1}</div>
+                                    <div>A.id: {res.a.id} (K:{res.a.key})</div>
+                                    <div>B.id: {res.b.id} (K:{res.b.key})</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Comparison Footer */}
+                    <div className="grid grid-cols-2 gap-4 text-xs text-slate-500">
+                        <div className={`p-2 rounded border ${algo === 'SNLJ' ? 'bg-blue-50 border-blue-200' : 'bg-transparent border-transparent'}`}>
+                            <strong className="block text-sm text-slate-700 mb-1">Simple Nested-Loop (SNLJ)</strong>
+                            复杂度: O(N * M) <br/>
+                            场景: B 表无索引，效率极低，A 的每行都要全扫描 B。
+                        </div>
+                        <div className={`p-2 rounded border ${algo === 'INLJ' ? 'bg-purple-50 border-purple-200' : 'bg-transparent border-transparent'}`}>
+                            <strong className="block text-sm text-slate-700 mb-1">Index Nested-Loop (INLJ)</strong>
+                            复杂度: O(N * log M)<br/>
+                            场景: B 表连接字段有索引。通过索引快速定位 + 回表，避免全表扫描。
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const StatCard = ({ label, value, color = "blue", icon }) => (
+            <div className={`bg-white p-3 rounded-lg border border-${color}-100 shadow-sm flex flex-col items-center justify-center`}>
+                <div className={`text-${color}-500 mb-1`}>{icon}</div>
+                <div className="text-2xl font-bold text-slate-700 font-mono">{value}</div>
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider text-center">{label}</div>
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<JoinSimulator />);
+    </script>
+</body>
+</html>

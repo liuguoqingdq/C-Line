@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binlog 两阶段提交交互演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        .pulse-ring { animation: pulse-ring 1.8s infinite; }
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35); }
+            70% { box-shadow: 0 0 0 12px rgba(59, 130, 246, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+
+        .step-node { transition: all 0.3s; }
+        .step-node.active { border-color: #3b82f6; background: #1e293b; transform: translateX(6px); }
+        .step-node.completed { opacity: 0.6; }
+
+        .flow-node { transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s; }
+        .flow-node.active { transform: translateY(-4px) scale(1.02); box-shadow: 0 10px 30px rgba(59, 130, 246, 0.2); }
+    </style>
+</head>
+<body class="p-4">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <header class="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 flex flex-col md:flex-row justify-between gap-4">
+            <div>
+                <h1 class="text-2xl font-bold">Binlog 两阶段提交（2PC）交互演示</h1>
+                <p class="text-sm text-slate-400 mt-1">模拟语句：<code class="text-yellow-300">UPDATE users SET name='xiaolin' WHERE id=1;</code></p>
+            </div>
+            <div class="flex gap-4">
+                <div class="bg-slate-900/70 border border-slate-700 rounded-xl px-4 py-2 text-center">
+                    <div class="text-[10px] uppercase text-slate-500 font-bold">事务状态</div>
+                    <div id="trx-state" class="mono text-slate-300 font-bold">IDLE</div>
+                </div>
+                <div class="bg-slate-900/70 border border-slate-700 rounded-xl px-4 py-2 text-center">
+                    <div class="text-[10px] uppercase text-slate-500 font-bold">LSN</div>
+                    <div id="lsn-val" class="mono text-blue-300 font-bold">2038400</div>
+                </div>
+            </div>
+        </header>
+
+        <section class="bg-slate-800/40 border border-slate-700 rounded-2xl p-4 space-y-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-sm font-bold text-slate-300 uppercase tracking-widest">2PC 总览：Redo 与 Binlog 保持一致</h2>
+                <span class="text-[10px] text-slate-500">按步骤点亮关键环节</span>
+            </div>
+            <div class="flex flex-col lg:flex-row items-center gap-3">
+                <div id="flow-buffer" class="flow-node px-4 py-3 rounded-xl border border-blue-700/60 bg-blue-900/30 text-xs uppercase text-blue-200 font-bold">Buffer Pool</div>
+                <div class="text-slate-600">→</div>
+                <div id="flow-redo" class="flow-node px-4 py-3 rounded-xl border border-orange-700/60 bg-orange-900/20 text-xs uppercase text-orange-200 font-bold">Redo Prepare</div>
+                <div class="text-slate-600">→</div>
+                <div id="flow-binlog" class="flow-node px-4 py-3 rounded-xl border border-green-700/60 bg-green-900/20 text-xs uppercase text-green-200 font-bold">Binlog Write</div>
+                <div class="text-slate-600">→</div>
+                <div id="flow-commit" class="flow-node px-4 py-3 rounded-xl border border-purple-700/60 bg-purple-900/20 text-xs uppercase text-purple-200 font-bold">Redo Commit</div>
+            </div>
+        </section>
+
+        <div class="grid grid-cols-12 gap-6">
+            <aside class="col-span-12 lg:col-span-4 space-y-4">
+                <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4">
+                    <h3 class="text-sm font-bold text-slate-400 uppercase mb-3 tracking-widest">步骤列表</h3>
+                    <div id="step-list" class="space-y-2"></div>
+                    <div class="mt-4">
+                        <div class="text-[10px] uppercase text-slate-500">进度</div>
+                        <div class="h-2 bg-slate-900 rounded-full overflow-hidden">
+                            <div id="progress-bar" class="h-full bg-blue-500 transition-all duration-500" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                    <div class="mt-5 flex gap-2">
+                        <button id="next-btn" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-bold transition-all active:scale-95">下一步</button>
+                        <button id="reset-btn" class="px-4 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">重置</button>
+                    </div>
+                </div>
+
+                <div class="bg-blue-900/20 border border-blue-800/50 rounded-2xl p-4 text-sm">
+                    <h4 class="font-bold text-blue-400 mb-2">当前步骤说明</h4>
+                    <div class="text-xs text-blue-200/80 space-y-2">
+                        <div id="current-step-label" class="font-bold text-blue-200">等待开始</div>
+                        <p id="current-step-desc">点击“下一步”开始体验两阶段提交流程。</p>
+                        <div id="tip-text" class="italic text-blue-200/70">提示：Redo 与 Binlog 必须保持一致。</div>
+                    </div>
+                </div>
+            </aside>
+
+            <main class="col-span-12 lg:col-span-8 space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <h5 class="text-xs uppercase text-orange-300 font-bold">Redo Log 状态</h5>
+                            <span id="redo-status" class="text-[10px] text-slate-500">空闲</span>
+                        </div>
+                        <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-4 text-sm">
+                            <div class="text-[10px] uppercase text-slate-500">持久化阶段</div>
+                            <div id="redo-stage" class="text-lg font-bold text-orange-200">IDLE</div>
+                            <div class="mt-3 text-[11px] text-slate-400">记录物理页变化，用于崩溃恢复。</div>
+                        </div>
+                        <div class="text-[11px] text-slate-400">
+                            <span class="text-orange-300 font-bold">关键点：</span>Prepare 必须先落盘，再写 Binlog。
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <h5 class="text-xs uppercase text-green-300 font-bold">Binlog 状态</h5>
+                            <span id="binlog-status" class="text-[10px] text-slate-500">空闲</span>
+                        </div>
+                        <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-4 text-sm">
+                            <div class="text-[10px] uppercase text-slate-500">日志内容</div>
+                            <div id="binlog-entry" class="text-xs mono text-green-200">等待写入...</div>
+                            <div class="mt-3 text-[11px] text-slate-400">逻辑日志，支持主从复制与备份。</div>
+                        </div>
+                        <div class="text-[11px] text-slate-400">
+                            <span class="text-green-300 font-bold">关键点：</span>写入成功后才能提交 Redo。
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800/70 border border-slate-700 rounded-2xl p-4">
+                    <h5 class="text-[10px] uppercase text-slate-500 font-bold mb-3">两阶段提交状态链</h5>
+                    <div class="flex items-center gap-4">
+                        <div id="state-prepare" class="flex-1 h-9 rounded-lg bg-slate-900 flex items-center justify-center text-[10px] font-bold border border-slate-700 uppercase">Prepare</div>
+                        <div class="text-slate-600">→</div>
+                        <div id="state-binlog" class="flex-1 h-9 rounded-lg bg-slate-900 flex items-center justify-center text-[10px] font-bold border border-slate-700 uppercase">Binlog</div>
+                        <div class="text-slate-600">→</div>
+                        <div id="state-commit" class="flex-1 h-9 rounded-lg bg-slate-900 flex items-center justify-center text-[10px] font-bold border border-slate-700 uppercase">Commit</div>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 text-sm">
+                    <h5 class="text-xs uppercase text-blue-300 font-bold mb-2">一致性说明</h5>
+                    <p class="text-slate-400 leading-relaxed">
+                        只要 Redo Prepare 和 Binlog Write 其中任一失败，事务就不会进入 Commit。
+                        MySQL 重启时会根据 Redo 与 Binlog 状态，自动回滚或重做，保证一致性。
+                    </p>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const steps = [
+            {
+                label: "更新 Buffer Pool",
+                desc: "在内存中修改数据页，记录为脏页。",
+                tip: "此时磁盘未更新，但 Redo 会保护内存修改。",
+                flowIds: ["flow-buffer"],
+                action: () => {
+                    setEl('trx-state', "RUNNING", 'text-blue-300');
+                    setEl('redo-status', "等待写入", 'text-orange-200');
+                    pulse('flow-buffer');
+                    addLSN(128);
+                }
+            },
+            {
+                label: "Redo Prepare 落盘",
+                desc: "写 Redo Log 的 Prepare 记录并刷盘。",
+                tip: "Prepare 是 2PC 的第一阶段。",
+                flowIds: ["flow-redo"],
+                action: () => {
+                    setEl('redo-stage', "PREPARE", 'text-orange-300');
+                    setEl('redo-status', "已落盘", 'text-orange-300');
+                    highlight('state-prepare', 'orange');
+                    pulse('flow-redo');
+                    addLSN(256);
+                }
+            },
+            {
+                label: "写入 Binlog",
+                desc: "生成逻辑日志，写入 Binlog 文件。",
+                tip: "Binlog 成功后才能进入 Commit。",
+                flowIds: ["flow-binlog"],
+                action: () => {
+                    setEl('binlog-entry', "UPDATE users SET name='xiaolin' WHERE id=1;", 'text-green-200');
+                    setEl('binlog-status', "写入成功", 'text-green-300');
+                    highlight('state-binlog', 'green');
+                    pulse('flow-binlog');
+                }
+            },
+            {
+                label: "Redo Commit",
+                desc: "Redo 记录 Commit，事务完成。",
+                tip: "此时即使宕机也能保持一致。",
+                flowIds: ["flow-commit"],
+                action: () => {
+                    setEl('trx-state', "COMMITTED", 'text-green-300');
+                    setEl('redo-stage', "COMMIT", 'text-purple-300');
+                    highlight('state-commit', 'purple');
+                    pulse('flow-commit');
+                    addLSN(64);
+                }
+            }
+        ];
+
+        let currentStep = 0;
+        let lsn = 2038400;
+
+        function init() {
+            const list = document.getElementById('step-list');
+            steps.forEach((s, i) => {
+                const div = document.createElement('div');
+                div.id = `step-node-${i}`;
+                div.className = "step-node p-3 rounded-xl border border-slate-700 text-xs cursor-default flex gap-3 items-center";
+                div.innerHTML = `
+                    <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0 text-[10px]">${i + 1}</span>
+                    <div class="flex-1">
+                        <div class="font-bold text-slate-300">${s.label}</div>
+                        <div class="text-[10px] text-slate-500">${s.desc}</div>
+                    </div>
+                    <span id="step-status-${i}" class="text-[10px] text-slate-500">待执行</span>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function nextStep() {
+            if (currentStep >= steps.length) return;
+            const btn = document.getElementById('next-btn');
+            btn.disabled = true;
+
+            const step = steps[currentStep];
+            document.getElementById(`step-node-${currentStep}`).classList.add('active');
+            document.getElementById(`step-status-${currentStep}`).innerText = "执行中";
+            setEl('current-step-label', step.label, 'text-blue-200');
+            setEl('current-step-desc', step.desc);
+            setEl('tip-text', step.tip);
+            highlightFlow(step.flowIds);
+            updateProgress();
+            await step.action();
+
+            document.getElementById(`step-node-${currentStep}`).classList.replace('active', 'completed');
+            document.getElementById(`step-status-${currentStep}`).innerText = "完成";
+            currentStep++;
+
+            if (currentStep === steps.length) {
+                btn.innerText = "演示完成";
+                highlightFlow([]);
+            } else {
+                btn.disabled = false;
+            }
+        }
+
+        function setEl(id, text, colorClass = '') {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.innerText = text;
+            if (colorClass) {
+                el.className = el.className.replace(/text-\w+-\d+/, '') + ' ' + colorClass;
+            }
+        }
+
+        function highlight(id, color) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const colors = {
+                orange: 'border-orange-500 bg-orange-900/40',
+                green: 'border-green-500 bg-green-900/40',
+                purple: 'border-purple-500 bg-purple-900/40'
+            };
+            el.className += ' ' + colors[color];
+        }
+
+        function pulse(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.add('pulse-ring');
+            setTimeout(() => el.classList.remove('pulse-ring'), 1200);
+        }
+
+        function highlightFlow(ids) {
+            const flowIds = ["flow-buffer", "flow-redo", "flow-binlog", "flow-commit"];
+            flowIds.forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (ids.includes(id)) el.classList.add('active');
+                else el.classList.remove('active');
+            });
+        }
+
+        function updateProgress() {
+            const bar = document.getElementById('progress-bar');
+            const percent = Math.min(((currentStep + 1) / steps.length) * 100, 100);
+            bar.style.width = `${percent}%`;
+        }
+
+        function addLSN(val) {
+            lsn += val;
+            setEl('lsn-val', lsn.toString());
+        }
+
+        document.getElementById('next-btn').addEventListener('click', nextStep);
+        document.getElementById('reset-btn').addEventListener('click', () => location.reload());
+        window.onload = init;
+    </script>
+</body>
+</html>

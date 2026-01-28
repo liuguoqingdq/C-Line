@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>内存池 Chunk 分配过程演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Consolas', monospace;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+        }
+        #svg-canvas {
+            width: 100%;
+            height: 450px;
+            background-color: #252526;
+            border-bottom: 1px solid #333;
+        }
+        .code-block {
+            padding: 8px;
+            margin-bottom: 8px;
+            border-left: 3px solid transparent;
+            background-color: #2d2d30;
+            opacity: 0.6;
+            transition: all 0.3s;
+            font-size: 12px;
+            white-space: pre-wrap;
+            border-radius: 0 4px 4px 0;
+        }
+        .code-active {
+            background-color: #37373d;
+            border-left-color: #007acc;
+            opacity: 1;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .var-box {
+            background: #333;
+            border: 1px solid #555;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            min-width: 120px;
+        }
+        .btn {
+            background-color: #0e639c;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn:hover { background-color: #1177bb; }
+        .btn:disabled { background-color: #4a4a4a; cursor: not-allowed; opacity: 0.5; }
+
+        /* Animation Classes */
+        .fade-in { animation: fadeIn 0.5s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Highlight specific text in code */
+        .hl-type { color: #569cd6; }
+        .hl-var { color: #9cdcfe; }
+        .hl-comment { color: #6a9955; }
+        .hl-keyword { color: #c586c0; }
+        .hl-num { color: #b5cea8; }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden">
+
+    <!-- Top: Visualization Canvas -->
+    <div class="relative flex-none">
+        <svg id="svg-canvas"></svg>
+        
+        <!-- Pointers Overlay -->
+        <div class="absolute top-4 left-4 flex gap-4">
+            <div class="var-box text-blue-300">
+                s_chunks:<br>
+                <span id="val-s-chunks" class="text-white font-mono font-bold">nullptr</span>
+            </div>
+            <div class="var-box text-green-300">
+                s_free_list:<br>
+                <span id="val-s-freelist" class="text-white font-mono font-bold">nullptr</span>
+            </div>
+            <div class="var-box text-yellow-300">
+                Current Chunk:<br>
+                <span id="val-chunk-capacity" class="text-gray-400">capacity=0</span><br>
+                <span id="val-chunk-nodes" class="text-gray-400">nodes=nullptr</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom: Controls & Code -->
+    <div class="flex-1 flex overflow-hidden border-t border-gray-700">
+        
+        <!-- Left: Control Panel -->
+        <div class="w-1/3 p-6 bg-[#1e1e1e] border-r border-gray-700 flex flex-col gap-4 overflow-y-auto">
+            <h2 class="text-xl font-bold text-white mb-2">过程控制</h2>
+            <div class="flex gap-2">
+                <button id="btn-prev" class="btn bg-gray-600" disabled><i class="fa-solid fa-backward"></i> 上一步</button>
+                <button id="btn-next" class="btn flex-1"><i class="fa-solid fa-forward"></i> 下一步 / 开始</button>
+                <button id="btn-reset" class="btn bg-red-800"><i class="fa-solid fa-rotate-right"></i> 重置</button>
+            </div>
+            
+            <div class="mt-4 p-4 bg-[#2d2d30] rounded border border-gray-600">
+                <h3 class="text-sm font-bold text-gray-400 mb-2">当前步骤详解:</h3>
+                <p id="step-desc" class="text-sm text-green-400 leading-relaxed font-mono">
+                    准备开始演示...
+                </p>
+            </div>
+        </div>
+
+        <!-- Right: Code Trace -->
+        <div class="w-2/3 bg-[#1e1e1e] p-4 overflow-y-auto font-mono text-xs md:text-sm">
+            
+            <!-- Step 1 -->
+            <div id="code-step-1" class="code-block">
+<span class="hl-type">std::size_t</span> bytes = CHUNK_SIZE; <span class="hl-comment">// 4096B</span>
+<span class="hl-comment">// 1. 向 OS 申请一块原始内存</span>
+<span class="hl-type">unsigned char</span>* raw = <span class="hl-keyword">static_cast</span>&lt;<span class="hl-type">unsigned char</span>*&gt;(::operator new(bytes));</div>
+
+            <!-- Step 2 -->
+            <div id="code-step-2" class="code-block">
+<span class="hl-comment">// 2. 在这块内存中构造一个 chunk，并初始化</span>
+<span class="hl-type">Chunk</span>* chunk = <span class="hl-keyword">new</span> (raw) <span class="hl-type">Chunk</span>;
+chunk->next_chunk = s_chunks;
+chunk->capacity = <span class="hl-num">0</span>;
+chunk->live = <span class="hl-num">0</span>;
+chunk->nodes = <span class="hl-keyword">nullptr</span>;
+s_chunks = chunk;</div>
+
+            <!-- Step 3 -->
+            <div id="code-step-3" class="code-block">
+<span class="hl-comment">// 3. 对齐剩余空间</span>
+<span class="hl-type">std::size_t</span> space = bytes - <span class="hl-keyword">sizeof</span>(<span class="hl-type">Chunk</span>);
+<span class="hl-type">void</span>* ptr = raw + <span class="hl-keyword">sizeof</span>(<span class="hl-type">Chunk</span>);
+<span class="hl-comment">// 让 Node 对齐到 alignof(Node)</span>
+<span class="hl-type">void</span>* aligned = std::align(<span class="hl-keyword">alignof</span>(<span class="hl-type">Node</span>), <span class="hl-keyword">sizeof</span>(<span class="hl-type">Node</span>), ptr, space);</div>
+
+            <!-- Step 4 -->
+            <div id="code-step-4" class="code-block">
+<span class="hl-comment">// 4. 计算能划分多少个 node</span>
+<span class="hl-type">unsigned char</span>* node_mem = <span class="hl-keyword">static_cast</span>&lt;<span class="hl-type">unsigned char</span>*&gt;(aligned);
+<span class="hl-type">std::size_t</span> node_count = space / <span class="hl-keyword">sizeof</span>(<span class="hl-type">Node</span>);
+chunk->capacity = node_count;
+chunk->nodes = <span class="hl-keyword">reinterpret_cast</span>&lt;<span class="hl-type">Node</span>*&gt;(node_mem);</div>
+
+            <!-- Step 5 -->
+            <div id="code-step-5" class="code-block">
+<span class="hl-comment">// 5. 原地构造 Node 并挂到 free_list</span>
+<span class="hl-keyword">for</span> (<span class="hl-type">std::size_t</span> i = <span class="hl-num">0</span>; i < node_count; ++i) {
+    <span class="hl-type">unsigned char</span>* p = node_mem + i * <span class="hl-keyword">sizeof</span>(<span class="hl-type">Node</span>);
+    <span class="hl-type">Node</span>* node = <span class="hl-keyword">new</span> (p) <span class="hl-type">Node</span>;
+    node->owner = chunk;
+    node->next_free = s_free_list;
+    s_free_list = node;
+}</div>
+
+        </div>
+    </div>
+
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script>
+        // --- Configuration ---
+        const SVG_NS = "http://www.w3.org/2000/svg";
+        const START_X = 50;
+        const START_Y = 150;
+        const CHUNK_WIDTH = 700;
+        const CHUNK_HEIGHT = 120;
+        const HEADER_WIDTH = 140;
+        const NODE_WIDTH = 90;
+        const GAP = 20; // Padding simulation
+        const NODE_COUNT = 5;
+
+        // --- DOM Elements ---
+        const svg = document.getElementById('svg-canvas');
+        const descEl = document.getElementById('step-desc');
+        const nextBtn = document.getElementById('btn-next');
+        const prevBtn = document.getElementById('btn-prev');
+        const resetBtn = document.getElementById('btn-reset');
+        
+        // Value Displays
+        const valSChunks = document.getElementById('val-s-chunks');
+        const valSFreeList = document.getElementById('val-s-freelist');
+        const valChunkCap = document.getElementById('val-chunk-capacity');
+        const valChunkNodes = document.getElementById('val-chunk-nodes');
+
+        // --- State ---
+        let currentStep = -1;
+
+        // --- Steps Definition ---
+        const steps = [
+            {
+                id: 'init',
+                codeId: null,
+                desc: "准备执行 add_chunk()...",
+                action: () => clearCanvas()
+            },
+            // Step 1: Malloc
+            {
+                id: 'malloc',
+                codeId: 'code-step-1',
+                desc: "1. 调用 ::operator new(bytes) 向操作系统申请 4096 字节的原始内存。\n此时我们得到了一个 void* 指针 (raw)，指向这块未初始化的黑色区域。",
+                action: () => {
+                    drawRawMemory();
+                }
+            },
+            // Step 2: Construct Chunk
+            {
+                id: 'chunk_init',
+                codeId: 'code-step-2',
+                desc: "2. 使用 Placement New 在 raw 内存头部构造 Chunk 对象。\n初始化成员变量：capacity=0, nodes=nullptr。\n关键：将 s_chunks 指向这个新块 (头插法)。",
+                action: () => {
+                    drawRawMemory();
+                    drawHeader(); // Shows capacity=0 inside
+                    updateSChunks("@0x1000");
+                }
+            },
+            // Step 3: Align
+            {
+                id: 'align',
+                codeId: 'code-step-3',
+                desc: "3. 跳过 Chunk 头 (sizeof(Chunk))，对剩余空间进行对齐计算 (std::align)。\n图中灰色区域即为对齐产生的 Padding，确保第一个 Node 的地址满足 alignof(Node) 要求。",
+                action: () => {
+                    drawRawMemory();
+                    drawHeader();
+                    drawPadding();
+                    updateSChunks("@0x1000");
+                }
+            },
+            // Step 4: Calc Metrics
+            {
+                id: 'calc',
+                codeId: 'code-step-4',
+                desc: "4. 计算 node_mem 起始地址和可容纳的节点数量 (node_count)。\n更新 chunk->capacity 和 chunk->nodes 指针。\n现在我们知道这块内存可以切分成 5 个 Node。",
+                action: () => {
+                    drawRawMemory();
+                    drawHeader(NODE_COUNT, "@0x10A0"); // Update header display
+                    drawPadding();
+                    drawNodeSlots();
+                    updateSChunks("@0x1000");
+                    valChunkCap.innerText = `capacity=${NODE_COUNT}`;
+                    valChunkCap.className = "text-white font-bold";
+                    valChunkNodes.innerText = `nodes=@0x10A0`;
+                    valChunkNodes.className = "text-white font-bold";
+                }
+            },
+            // Step 5: Loop - Generate Nodes dynamically
+            ...generateLoopSteps()
+        ];
+
+        function generateLoopSteps() {
+            let loopSteps = [];
+            for (let i = 0; i < NODE_COUNT; i++) {
+                loopSteps.push({
+                    id: `loop_${i}`,
+                    codeId: 'code-step-5',
+                    desc: `5. [循环 i=${i}] 在偏移位置原地构造 Node ${i}。\n关键逻辑：\n(1) node->next_free = s_free_list (指向上一个头部)\n(2) s_free_list = node (更新头部为自己)\n这就是“链表倒序生长”的原因。`,
+                    data: { i },
+                    action: (data) => renderLoopState(data.i)
+                });
+            }
+            // Final
+            loopSteps.push({
+                id: 'done',
+                codeId: null,
+                desc: "初始化完成！\n内存是连续的 (Node 0->1->2...)，但 free_list 链表是反向的 (Node 4->3->2->1->0->nullptr)。",
+                action: () => renderLoopState(NODE_COUNT - 1, true)
+            });
+            return loopSteps;
+        }
+
+        // --- Drawing Logic ---
+
+        function clearCanvas() {
+            svg.innerHTML = '';
+            valSChunks.innerText = 'nullptr';
+            valSFreeList.innerText = 'nullptr';
+            valChunkCap.innerText = 'capacity=0';
+            valChunkCap.className = 'text-gray-400';
+            valChunkNodes.innerText = 'nodes=nullptr';
+            valChunkNodes.className = 'text-gray-400';
+            setupMarkers();
+        }
+
+        function createRect(x, y, w, h, fill, stroke, text, subtext) {
+            const g = document.createElementNS(SVG_NS, "g");
+            g.classList.add("fade-in");
+
+            const rect = document.createElementNS(SVG_NS, "rect");
+            rect.setAttribute("x", x);
+            rect.setAttribute("y", y);
+            rect.setAttribute("width", w);
+            rect.setAttribute("height", h);
+            rect.setAttribute("fill", fill);
+            rect.setAttribute("stroke", stroke);
+            rect.setAttribute("stroke-width", "2");
+            g.appendChild(rect);
+
+            if (text) {
+                const txt = document.createElementNS(SVG_NS, "text");
+                txt.setAttribute("x", x + w/2);
+                txt.setAttribute("y", y + h/2);
+                txt.setAttribute("text-anchor", "middle");
+                txt.setAttribute("dominant-baseline", "middle");
+                txt.setAttribute("fill", "white");
+                txt.setAttribute("font-size", "14px");
+                txt.setAttribute("font-weight", "bold");
+                txt.textContent = text;
+                g.appendChild(txt);
+            }
+
+            if (subtext) {
+                const stxt = document.createElementNS(SVG_NS, "text");
+                stxt.setAttribute("x", x + w/2);
+                stxt.setAttribute("y", y + h/2 + 20);
+                stxt.setAttribute("text-anchor", "middle");
+                stxt.setAttribute("fill", "#bbb");
+                stxt.setAttribute("font-size", "10px");
+                stxt.textContent = subtext;
+                g.appendChild(stxt);
+            }
+            return g;
+        }
+
+        function drawRawMemory() {
+            svg.appendChild(createRect(START_X, START_Y, CHUNK_WIDTH, CHUNK_HEIGHT, "#2d2d30", "#555", "Raw Memory (4KB)", "unsigned char* raw"));
+        }
+
+        function drawHeader(capacity = 0, nodesPtr = "nullptr") {
+            // Remove old header if exists to redraw
+            const old = document.getElementById('chunk-header-group');
+            if(old) old.remove();
+
+            const g = document.createElementNS(SVG_NS, "g");
+            g.id = "chunk-header-group";
+            g.classList.add("fade-in");
+
+            // Box
+            const rect = document.createElementNS(SVG_NS, "rect");
+            rect.setAttribute("x", START_X);
+            rect.setAttribute("y", START_Y);
+            rect.setAttribute("width", HEADER_WIDTH);
+            rect.setAttribute("height", CHUNK_HEIGHT);
+            rect.setAttribute("fill", "#0e639c");
+            rect.setAttribute("stroke", "#4fc1ff");
+            rect.setAttribute("stroke-width", "2");
+            g.appendChild(rect);
+
+            // Title
+            const title = document.createElementNS(SVG_NS, "text");
+            title.setAttribute("x", START_X + 10);
+            title.setAttribute("y", START_Y + 25);
+            title.setAttribute("fill", "white");
+            title.setAttribute("font-weight", "bold");
+            title.textContent = "struct Chunk";
+            g.appendChild(title);
+
+            // Fields
+            const fields = [
+                `capacity: ${capacity}`,
+                `live: 0`,
+                `nodes: ${nodesPtr}`
+            ];
+            
+            fields.forEach((f, i) => {
+                const txt = document.createElementNS(SVG_NS, "text");
+                txt.setAttribute("x", START_X + 10);
+                txt.setAttribute("y", START_Y + 50 + (i * 20));
+                txt.setAttribute("fill", "#ddd");
+                txt.setAttribute("font-size", "12px");
+                txt.setAttribute("font-family", "monospace");
+                txt.textContent = f;
+                g.appendChild(txt);
+            });
+
+            svg.appendChild(g);
+        }
+
+        function drawPadding() {
+            const padX = START_X + HEADER_WIDTH;
+            svg.appendChild(createRect(padX, START_Y, GAP, CHUNK_HEIGHT, "#444", "none"));
+            
+            // Label
+            const txt = document.createElementNS(SVG_NS, "text");
+            txt.setAttribute("x", padX + GAP/2);
+            txt.setAttribute("y", START_Y - 10);
+            txt.setAttribute("text-anchor", "middle");
+            txt.setAttribute("fill", "#666");
+            txt.setAttribute("font-size", "10px");
+            txt.textContent = "pad";
+            svg.appendChild(txt);
+        }
+
+        function drawNodeSlots() {
+            const startNodeX = START_X + HEADER_WIDTH + GAP;
+            
+            // Draw Pointer from Header nodes to here
+            // Simplified: just show slots
+            
+            for(let i=0; i<NODE_COUNT; i++) {
+                const x = startNodeX + i * NODE_WIDTH;
+                const rect = document.createElementNS(SVG_NS, "rect");
+                rect.setAttribute("x", x);
+                rect.setAttribute("y", START_Y);
+                rect.setAttribute("width", NODE_WIDTH);
+                rect.setAttribute("height", CHUNK_HEIGHT);
+                rect.setAttribute("fill", "none");
+                rect.setAttribute("stroke", "#666");
+                rect.setAttribute("stroke-dasharray", "4 4");
+                svg.appendChild(rect);
+                
+                const txt = document.createElementNS(SVG_NS, "text");
+                txt.setAttribute("x", x + 5);
+                txt.setAttribute("y", START_Y + CHUNK_HEIGHT - 5);
+                txt.setAttribute("fill", "#666");
+                txt.setAttribute("font-size", "10px");
+                txt.textContent = `#${i}`;
+                svg.appendChild(txt);
+            }
+        }
+
+        function renderLoopState(currIndex, isFinal = false) {
+            clearCanvas();
+            drawRawMemory();
+            drawHeader(NODE_COUNT, "@0x10A0");
+            drawPadding();
+            drawNodeSlots();
+            updateSChunks("@0x1000");
+            
+            // Restore static values
+            valChunkCap.innerText = `capacity=${NODE_COUNT}`;
+            valChunkCap.className = "text-white font-bold";
+            valChunkNodes.innerText = `nodes=@0x10A0`;
+            valChunkNodes.className = "text-white font-bold";
+
+            const startNodeX = START_X + HEADER_WIDTH + GAP;
+
+            // Render Nodes 0 to currIndex
+            for (let i = 0; i <= currIndex; i++) {
+                const x = startNodeX + i * NODE_WIDTH;
+                const isCurrent = (i === currIndex);
+                
+                // Colors
+                const fill = isCurrent && !isFinal ? "#ce9178" : "#2d4e66"; 
+                const stroke = isCurrent && !isFinal ? "white" : "#4ec9b0";
+                
+                const g = createRect(x, START_Y, NODE_WIDTH, CHUNK_HEIGHT, fill, stroke);
+                svg.appendChild(g);
+
+                // Node Label
+                const title = document.createElementNS(SVG_NS, "text");
+                title.setAttribute("x", x + 10);
+                title.setAttribute("y", START_Y + 20);
+                title.setAttribute("fill", "white");
+                title.setAttribute("font-weight", "bold");
+                title.setAttribute("font-size", "12px");
+                title.textContent = `Node ${i}`;
+                g.appendChild(title);
+
+                // Owner Field
+                const ownerTxt = document.createElementNS(SVG_NS, "text");
+                ownerTxt.setAttribute("x", x + 10);
+                ownerTxt.setAttribute("y", START_Y + 40);
+                ownerTxt.setAttribute("fill", "#aaa");
+                ownerTxt.setAttribute("font-size", "10px");
+                ownerTxt.textContent = "owner=@Chunk";
+                g.appendChild(ownerTxt);
+
+                // Next Pointer
+                const nextTxt = document.createElementNS(SVG_NS, "text");
+                nextTxt.setAttribute("x", x + 10);
+                nextTxt.setAttribute("y", START_Y + 60);
+                nextTxt.setAttribute("fill", "#4ec9b0");
+                nextTxt.setAttribute("font-size", "11px");
+                nextTxt.setAttribute("font-family", "monospace");
+                
+                let nextTargetStr = "nullptr";
+                if (i > 0) nextTargetStr = `Node ${i-1}`;
+                else nextTargetStr = "nullptr";
+
+                nextTxt.textContent = `next=${nextTargetStr}`;
+                g.appendChild(nextTxt);
+
+                // Draw Link Arrow (Visualizing next_free)
+                if (i > 0) {
+                    const prevX = startNodeX + (i-1) * NODE_WIDTH + NODE_WIDTH/2;
+                    const currCenterX = x + NODE_WIDTH/2;
+                    // Arrow from current to previous
+                    drawCurvedArrow(currCenterX, START_Y + 70, prevX, START_Y + 70, "#4ec9b0");
+                }
+            }
+
+            // Update s_free_list to point to current
+            updateSFreeList(currIndex);
+        }
+
+        function updateSChunks(val) {
+            valSChunks.innerText = val;
+            // Draw global pointer line
+            if (val !== 'nullptr') {
+                drawGlobalPointer(START_X + HEADER_WIDTH/2, 55, "#3b82f6");
+            }
+        }
+
+        function updateSFreeList(nodeIndex) {
+            valSFreeList.innerText = `Node ${nodeIndex}`;
+            const startNodeX = START_X + HEADER_WIDTH + GAP;
+            const targetX = startNodeX + nodeIndex * NODE_WIDTH + NODE_WIDTH/2;
+            drawGlobalPointer(targetX, 55, "#4ade80");
+        }
+
+        function drawGlobalPointer(targetX, startY, color) {
+             const path = document.createElementNS(SVG_NS, "path");
+             const d = `M ${targetX} ${startY} L ${targetX} ${START_Y - 5}`;
+             path.setAttribute("d", d);
+             path.setAttribute("stroke", color);
+             path.setAttribute("stroke-width", "3");
+             path.setAttribute("stroke-dasharray", "4 2");
+             path.setAttribute("marker-end", `url(#arrowhead-${color.replace('#','')})`);
+             path.classList.add("fade-in");
+             svg.appendChild(path);
+        }
+
+        function drawCurvedArrow(x1, y1, x2, y2, color) {
+            const path = document.createElementNS(SVG_NS, "path");
+            const height = 25; 
+            // Control points for bezier curve (arch bottom)
+            const d = `M ${x1} ${y1} Q ${(x1+x2)/2} ${y1 + height} ${x2} ${y2}`;
+            
+            path.setAttribute("d", d);
+            path.setAttribute("stroke", color);
+            path.setAttribute("stroke-width", "2");
+            path.setAttribute("fill", "none");
+            path.setAttribute("marker-end", `url(#arrowhead-${color.replace('#','')})`);
+            svg.appendChild(path);
+        }
+
+        function setupMarkers() {
+            const defs = document.createElementNS(SVG_NS, "defs");
+            
+            const createMarker = (color) => {
+                const id = `arrowhead-${color.replace('#','')}`;
+                if(document.getElementById(id)) return; // exists
+                const m = document.createElementNS(SVG_NS, "marker");
+                m.setAttribute("id", id);
+                m.setAttribute("markerWidth", "10");
+                m.setAttribute("markerHeight", "7");
+                m.setAttribute("refX", "9");
+                m.setAttribute("refY", "3.5");
+                m.setAttribute("orient", "auto");
+                const p = document.createElementNS(SVG_NS, "polygon");
+                p.setAttribute("points", "0 0, 10 3.5, 0 7");
+                p.setAttribute("fill", color);
+                m.appendChild(p);
+                return m;
+            };
+
+            const colors = ['#3b82f6', '#4ade80', '#4ec9b0'];
+            colors.forEach(c => {
+                const m = createMarker(c);
+                if(m) defs.appendChild(m);
+            });
+
+            if(!document.getElementById('svg-defs')) {
+                defs.id = 'svg-defs';
+                svg.appendChild(defs);
+            }
+        }
+
+        // --- Controller ---
+
+        function updateUI() {
+            const step = steps[currentStep];
+            
+            // Text
+            descEl.innerText = step.desc;
+
+            // Highlight Code
+            document.querySelectorAll('.code-block').forEach(el => el.classList.remove('code-active'));
+            if(step.codeId) {
+                const el = document.getElementById(step.codeId);
+                if(el) {
+                    el.classList.add('code-active');
+                    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }
+
+            // Action
+            step.action(step.data);
+
+            // Button State
+            prevBtn.disabled = currentStep <= 0;
+            nextBtn.disabled = currentStep >= steps.length - 1;
+            nextBtn.innerHTML = (currentStep >= steps.length - 1) 
+                ? '<i class="fa-solid fa-check"></i> 演示结束' 
+                : '<i class="fa-solid fa-forward"></i> 下一步';
+        }
+
+        nextBtn.addEventListener('click', () => {
+            if(currentStep < steps.length - 1) {
+                currentStep++;
+                updateUI();
+            }
+        });
+
+        prevBtn.addEventListener('click', () => {
+            if(currentStep > 0) {
+                currentStep--;
+                updateUI();
+            }
+        });
+
+        resetBtn.addEventListener('click', () => {
+            currentStep = 0;
+            updateUI();
+        });
+
+        // Init
+        setupMarkers();
+        currentStep = 0;
+        updateUI();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>选择排序算法可视化 - 调试版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .bar {
+            transition: all 0.3s ease;
+        }
+        .sorted { background-color: #10b981; } /* Emerald 500 */
+        .comparing { background-color: #3b82f6; } /* Blue 500 */
+        .current-min { background-color: #f59e0b; } /* Amber 500 */
+        .default { background-color: #94a3b8; } /* Slate 400 */
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans">
+
+<div class="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
+    <!-- Header -->
+    <header class="mb-8 text-center">
+        <h1 class="text-3xl font-bold text-slate-900 flex items-center justify-center gap-3">
+            <i data-lucide="bar-chart-2" class="text-blue-600"></i>
+            选择排序可视化 (带单步调试)
+        </h1>
+        <p class="text-slate-500 mt-2 italic">你可以通过“自动排序”观看连续演示，或使用“单步执行”深入理解每一步细节。</p>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+        <!-- Control Panel -->
+        <div class="lg:col-span-1 space-y-6">
+            <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <i data-lucide="settings" class="w-5 h-5 text-slate-500"></i> 控制面板
+                </h2>
+                
+                <div class="space-y-3">
+                    <button id="startBtn" onclick="runAutoSort()" class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center justify-center gap-2">
+                        <i data-lucide="play" class="w-4 h-4"></i> 自动排序
+                    </button>
+
+                    <button id="stepBtn" onclick="handleStepClick()" class="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg shadow-emerald-100 transition-all active:scale-95 flex items-center justify-center gap-2">
+                        <i data-lucide="skip-forward" class="w-4 h-4"></i> 单步执行
+                    </button>
+                    
+                    <button id="resetBtn" onclick="resetArray()" class="w-full py-2 px-4 border border-slate-300 bg-white hover:bg-slate-50 text-slate-600 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2">
+                        <i data-lucide="rotate-ccw" class="w-4 h-4"></i> 随机重置
+                    </button>
+
+                    <div class="pt-4 border-t border-slate-100">
+                        <label class="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">自动演示速度</label>
+                        <input type="range" id="speedRange" min="50" max="1000" value="400" step="50" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                        <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+                            <span>快</span>
+                            <span>慢</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">状态图例</h2>
+                <div class="space-y-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-4 h-4 rounded bg-slate-400"></div>
+                        <span class="text-xs font-medium">未处理区域</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-4 h-4 rounded bg-blue-500"></div>
+                        <span class="text-xs font-medium">当前比较 (j)</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-4 h-4 rounded bg-amber-500"></div>
+                        <span class="text-xs font-medium">最小记录 (min)</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-4 h-4 rounded bg-emerald-500"></div>
+                        <span class="text-xs font-medium">已排序部分 (i)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Visualization Area -->
+        <div class="lg:col-span-3 space-y-6">
+            <!-- Array Container -->
+            <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 min-h-[400px] flex flex-col">
+                <div id="arrayContainer" class="flex-1 flex items-end justify-around gap-2 pb-8 pt-4">
+                    <!-- Bars will be generated here -->
+                </div>
+                
+                <!-- Step Explanation -->
+                <div id="statusLabel" class="p-4 bg-slate-900 rounded-2xl text-emerald-400 font-mono text-xs min-h-[60px] flex items-center shadow-inner leading-relaxed">
+                    > 点击“自动排序”或“单步执行”开始...
+                </div>
+            </div>
+
+            <!-- Algorithm Info -->
+            <div class="bg-white p-6 rounded-3xl border border-slate-200">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-bold text-slate-900 flex items-center gap-2">
+                        <i data-lucide="terminal" class="w-4 h-4 text-blue-500"></i> 调试提示
+                    </h3>
+                    <span id="stepCounter" class="text-[10px] font-bold bg-slate-100 px-2 py-1 rounded text-slate-500 tracking-tighter uppercase">Step: 0</span>
+                </div>
+                <p class="text-xs text-slate-500 leading-relaxed">
+                    在<strong>单步调试</strong>模式下，你可以观察算法如何在每一轮迭代中逐步缩小范围并确定最小元素。每次点击“单步执行”都会触发一次逻辑判断。
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    lucide.createIcons();
+
+    let array = [];
+    const arraySize = 15;
+    let isSorting = false;
+    let isStepMode = false;
+    let stepResolver = null;
+    let stepCount = 0;
+
+    const container = document.getElementById('arrayContainer');
+    const statusLabel = document.getElementById('statusLabel');
+    const speedRange = document.getElementById('speedRange');
+    const stepCounterLabel = document.getElementById('stepCounter');
+
+    // 生成随机数组
+    function resetArray() {
+        if (isSorting && !isStepMode) return;
+        isSorting = false;
+        isStepMode = false;
+        stepCount = 0;
+        updateStepCounter();
+        array = [];
+        for (let i = 0; i < arraySize; i++) {
+            array.push(Math.floor(Math.random() * 90) + 10);
+        }
+        renderArray();
+        statusLabel.innerText = "> 数组已重置。准备开始调试。";
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stepBtn').disabled = false;
+        document.getElementById('startBtn').innerHTML = `<i data-lucide="play" class="w-4 h-4"></i> 自动排序`;
+        lucide.createIcons();
+    }
+
+    // 渲染数组柱状图
+    function renderArray(sortedIdx = -1, compareIdx = -1, minIdx = -1) {
+        container.innerHTML = '';
+        array.forEach((val, i) => {
+            const bar = document.createElement('div');
+            bar.style.height = `${val * 3}px`;
+            bar.className = 'bar w-full rounded-t-lg relative flex justify-center';
+            
+            if (i <= sortedIdx) {
+                bar.classList.add('sorted');
+            } else if (i === minIdx) {
+                bar.classList.add('current-min');
+            } else if (i === compareIdx) {
+                bar.classList.add('comparing');
+            } else {
+                bar.classList.add('default');
+            }
+
+            const span = document.createElement('span');
+            span.className = 'absolute -top-6 text-[10px] font-bold text-slate-400';
+            span.innerText = val;
+            bar.appendChild(span);
+
+            container.appendChild(bar);
+        });
+    }
+
+    function updateStepCounter() {
+        stepCounterLabel.innerText = `Step: ${stepCount}`;
+    }
+
+    // 延时或等待点击
+    async function waitForAction() {
+        stepCount++;
+        updateStepCounter();
+        if (isStepMode) {
+            return new Promise(resolve => {
+                stepResolver = resolve;
+            });
+        } else {
+            await new Promise(resolve => setTimeout(resolve, speedRange.value));
+        }
+    }
+
+    // 响应单步按钮点击
+    function handleStepClick() {
+        if (!isSorting) {
+            isStepMode = true;
+            isSorting = true;
+            document.getElementById('startBtn').disabled = true;
+            startSelectionSort();
+        } else if (isStepMode && stepResolver) {
+            stepResolver(); // 解除等待，执行下一步
+        }
+    }
+
+    // 响应自动按钮点击
+    function runAutoSort() {
+        if (isSorting) return;
+        isStepMode = false;
+        isSorting = true;
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stepBtn').disabled = true;
+        startSelectionSort();
+    }
+
+    // 核心排序逻辑
+    async function startSelectionSort() {
+        const n = array.length;
+
+        for (let i = 0; i < n - 1; i++) {
+            let minIdx = i;
+            statusLabel.innerText = `> 第 ${i + 1} 轮：开始处理索引 ${i} 以后的部分。`;
+            renderArray(i - 1, -1, minIdx);
+            await waitForAction();
+
+            for (let j = i + 1; j < n; j++) {
+                statusLabel.innerText = `> 比较：索引 ${j}(${array[j]}) 是否小于 最小记录(${array[minIdx]})?`;
+                renderArray(i - 1, j, minIdx);
+                await waitForAction();
+
+                if (array[j] < array[minIdx]) {
+                    minIdx = j;
+                    statusLabel.innerText = `> 发现更小值！更新最小记录索引为 ${minIdx} (值为 ${array[minIdx]})。`;
+                    renderArray(i - 1, j, minIdx);
+                    await waitForAction();
+                }
+            }
+
+            if (minIdx !== i) {
+                statusLabel.innerText = `> 本轮结束：将位置 ${i} 的 ${array[i]} 与 最小值 ${array[minIdx]} 交换。`;
+                [array[i], array[minIdx]] = [array[minIdx], array[i]];
+                renderArray(i, -1, i);
+                await waitForAction();
+            } else {
+                statusLabel.innerText = `> 本轮结束：位置 ${i} 已经是最小值，无需交换。`;
+                renderArray(i, -1, i);
+                await waitForAction();
+            }
+        }
+
+        statusLabel.innerText = `> 排序全部完成！共耗费 ${stepCount} 个操作步骤。`;
+        renderArray(n);
+        isSorting = false;
+        isStepMode = false;
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stepBtn').disabled = false;
+        
+        // 完成反馈
+        const bars = document.querySelectorAll('.bar');
+        bars.forEach(bar => bar.style.backgroundColor = '#8b5cf6');
+    }
+
+    window.onload = resetArray;
+</script>
+
+</body>
+</html>

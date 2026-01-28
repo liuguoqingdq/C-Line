@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>希尔排序可视化 (Shell Sort)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 核心样式：确保即使 Tailwind 未加载也能显示 */
+        #visualizer-container {
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            height: 100%;
+            min-height: 300px;
+        }
+        
+        .bar {
+            background-color: #3B82F6; /* Fallback: blue-500 */
+            transition: height 0.2s ease-in-out, background-color 0.2s, opacity 0.2s;
+            flex: 1;
+            margin: 0 1px;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            min-width: 4px; /* 防止过窄看不见 */
+            position: relative;
+        }
+
+        /* 状态颜色类 */
+        .bar-active { background-color: #EF4444 !important; } /* Red: 正在比较 */
+        .bar-key { background-color: #EAB308 !important; box-shadow: 0 0 15px rgba(234, 179, 8, 0.8); z-index: 10; } /* Yellow: 当前 Key */
+        .bar-sorted { background-color: #22C55E !important; } /* Green: 完成 */
+        .bar-dim { opacity: 0.3 !important; } /* Dim: 已移动走/不重要 */
+        .bar-target { background-color: #A855F7 !important; } /* Purple: 移动目标位 */
+
+        /* 代码高亮样式 */
+        .highlight-line {
+            background-color: #374151; /* gray-700 */
+            border-left: 4px solid #F59E0B; /* amber-500 */
+            color: #FBBF24; /* amber-400 */
+        }
+        
+        /* 滚动条样式 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col font-sans">
+
+    <!-- 头部 -->
+    <header class="p-6 bg-gray-800 shadow-lg border-b border-gray-700 flex flex-col md:flex-row justify-between items-center z-10">
+        <div>
+            <h1 class="text-2xl font-bold text-blue-400">希尔排序可视化 (Shell Sort)</h1>
+            <p class="text-gray-400 text-sm mt-1">支持单步调试与断点观察</p>
+        </div>
+        <div class="flex items-center gap-4 mt-4 md:mt-0">
+            <div class="flex flex-col items-end">
+                <label for="speedRange" class="text-xs text-gray-400 mb-1">自动播放速度</label>
+                <input type="range" id="speedRange" min="1" max="100" value="30" class="w-32 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+            </div>
+            <div class="flex flex-col items-end ml-4">
+                 <label for="sizeRange" class="text-xs text-gray-400 mb-1">数组大小</label>
+                 <input type="range" id="sizeRange" min="5" max="40" value="15" class="w-32 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500">
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="flex-1 flex flex-col lg:flex-row overflow-hidden h-[calc(100vh-100px)]">
+        
+        <!-- 左侧：可视化区域 -->
+        <section class="flex-1 p-4 flex flex-col relative bg-gray-900">
+            <!-- 状态面板 -->
+            <div class="absolute top-4 left-4 z-10 bg-gray-800/90 backdrop-blur p-3 rounded border border-gray-700 text-xs shadow-xl pointer-events-none">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="w-3 h-3 bg-blue-500 rounded-full"></span>
+                    <span>普通</span>
+                </div>
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="w-3 h-3 bg-yellow-500 rounded-full"></span>
+                    <span>Key (暂存值)</span>
+                </div>
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="w-3 h-3 bg-red-500 rounded-full"></span>
+                    <span>比较源 (j)</span>
+                </div>
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="w-3 h-3 bg-purple-500 rounded-full"></span>
+                    <span>覆盖目标 (j+gap)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="w-3 h-3 bg-green-500 rounded-full"></span>
+                    <span>完成</span>
+                </div>
+            </div>
+
+            <!-- 动态信息 -->
+            <div class="mt-2 mb-2 text-center h-8 shrink-0">
+                <span id="status-text" class="text-lg font-mono text-yellow-300 transition-all">准备就绪</span>
+            </div>
+
+            <!-- 柱状图容器 -->
+            <div class="flex-1 border-b-2 border-gray-700 pb-1 px-2 w-full relative">
+                 <div id="visualizer-container">
+                    <!-- 柱子将通过 JS 生成在这里 -->
+                 </div>
+            </div>
+
+            <!-- 控制按钮 -->
+            <div class="mt-4 flex justify-center gap-4 shrink-0 pb-4">
+                <button id="btn-generate" class="px-5 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white font-medium transition active:scale-95 border border-gray-600">
+                    <span class="mr-1">↻</span> 重置数组
+                </button>
+                
+                <div class="w-px h-10 bg-gray-700 mx-2"></div>
+
+                <button id="btn-play" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white font-medium transition active:scale-95 shadow-lg shadow-blue-900/50 flex items-center">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/></svg>
+                    自动播放
+                </button>
+                
+                <button id="btn-pause" class="px-6 py-2 bg-yellow-600 hover:bg-yellow-500 rounded text-white font-medium transition active:scale-95 hidden flex items-center">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                    暂停
+                </button>
+
+                <button id="btn-step" class="px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-white font-medium transition active:scale-95 shadow-lg shadow-purple-900/50 flex items-center" disabled>
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
+                    单步执行
+                </button>
+            </div>
+        </section>
+
+        <!-- 右侧：代码对照区域 -->
+        <aside class="w-full lg:w-1/3 bg-gray-950 border-l border-gray-800 flex flex-col">
+            <div class="p-4 border-b border-gray-800 bg-gray-900 flex justify-between items-center">
+                 <h3 class="text-gray-400 font-bold">C++ 逻辑追踪</h3>
+                 <span class="text-xs text-gray-500 bg-gray-800 px-2 py-1 rounded">Read-only</span>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-4 font-mono text-sm relative">
+                <pre class="text-gray-300"><code id="code-block">
+<div id="line-1" class="p-1">void shellSort(int a[], int n) {</div>
+<div id="line-2" class="p-1 pl-4 opacity-50">// 初始 gap = n/2</div>
+<div id="line-3" class="p-1 pl-4">for (int gap = n / 2; gap > 0; gap /= 2) {</div>
+<div id="line-4" class="p-1 pl-8 opacity-50">// 这里的 i 是未排序部分的第一个元素</div>
+<div id="line-5" class="p-1 pl-8">for (int i = gap; i < n; ++i) {</div>
+<div id="line-6" class="p-1 pl-12">int key = a[i];</div>
+<div id="line-7" class="p-1 pl-12">int j = i - gap;</div>
+<div id="line-8" class="p-1 pl-12 opacity-50">// 向前比较并移动</div>
+<div id="line-9" class="p-1 pl-12">while (j >= 0 && a[j] > key) {</div>
+<div id="line-10" class="p-1 pl-16">a[j + gap] = a[j];</div>
+<div id="line-11" class="p-1 pl-16">j -= gap;</div>
+<div id="line-12" class="p-1 pl-12">}</div>
+<div id="line-13" class="p-1 pl-12">a[j + gap] = key;</div>
+<div id="line-14" class="p-1 pl-8">}</div>
+<div id="line-15" class="p-1 pl-4">}</div>
+<div id="line-16" class="p-1">}</div>
+                </code></pre>
+            </div>
+            
+            <div class="p-4 bg-gray-800 border-t border-gray-700 shrink-0">
+                <h4 class="font-bold text-blue-400 mb-2 text-xs uppercase tracking-wider">Variables</h4>
+                <div class="grid grid-cols-4 gap-2 text-center font-mono">
+                    <div class="bg-gray-700 rounded p-2">
+                        <div class="text-xs text-gray-400">Gap</div>
+                        <div id="var-gap" class="text-white font-bold text-lg">-</div>
+                    </div>
+                    <div class="bg-gray-700 rounded p-2">
+                        <div class="text-xs text-gray-400">i</div>
+                        <div id="var-i" class="text-white font-bold text-lg">-</div>
+                    </div>
+                    <div class="bg-gray-700 rounded p-2">
+                        <div class="text-xs text-gray-400">j</div>
+                        <div id="var-j" class="text-white font-bold text-lg">-</div>
+                    </div>
+                    <div class="bg-gray-700 rounded p-2 border border-yellow-500/30">
+                        <div class="text-xs text-yellow-400">Key</div>
+                        <div id="var-key" class="text-yellow-400 font-bold text-lg">-</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <script>
+        // DOM 元素引用
+        const container = document.getElementById('visualizer-container');
+        const btnGenerate = document.getElementById('btn-generate');
+        const btnPlay = document.getElementById('btn-play');
+        const btnPause = document.getElementById('btn-pause');
+        const btnStep = document.getElementById('btn-step');
+        
+        const speedRange = document.getElementById('speedRange');
+        const sizeRange = document.getElementById('sizeRange');
+        const statusText = document.getElementById('status-text');
+        
+        // 变量显示 DOM
+        const varGap = document.getElementById('var-gap');
+        const varI = document.getElementById('var-i');
+        const varJ = document.getElementById('var-j');
+        const varKey = document.getElementById('var-key');
+
+        // 状态变量
+        let array = [];
+        let bars = [];
+        let isSorting = false;
+        let isPaused = false;
+        let abortController = null; 
+        let stepResolve = null; // 用于单步控制的 Promise resolve
+
+        // ----------------------
+        // 核心控制逻辑 (Pause/Step)
+        // ----------------------
+        
+        // 检查当前状态：如果是暂停，则等待 Step 或 Play 信号
+        async function checkControlState(signal) {
+            if (signal.aborted) throw new Error('Aborted');
+
+            if (isPaused) {
+                // 如果暂停，创建一个 Promise 挂起执行，直到被外部 resolve
+                updateStatus("已暂停 - 请点击“单步执行”或“继续”", "text-yellow-500");
+                await new Promise(resolve => {
+                    stepResolve = resolve;
+                });
+                // 恢复后清空 resolve 函数
+                stepResolve = null;
+            } else {
+                // 如果自动播放，则根据速度延时
+                await sleep(getDelay());
+            }
+        }
+
+        // 触发单步
+        function triggerStep() {
+            if (stepResolve) {
+                stepResolve(); // 释放 Promise，代码继续走一步
+                // 注意：由于是单步，执行完这一步后需要再次进入暂停逻辑？
+                // 当前逻辑是：如果 isPaused 仍为 true，下一次循环里的 checkControlState 会再次挂起
+                // 所以不需要额外操作，只要不把 isPaused 设为 false 即可
+            }
+        }
+
+        // 切换暂停/播放
+        function togglePause(pause) {
+            isPaused = pause;
+            if (isPaused) {
+                btnPlay.classList.remove('hidden');
+                btnPause.classList.add('hidden');
+                btnStep.disabled = false;
+                btnStep.classList.remove('opacity-50', 'cursor-not-allowed');
+            } else {
+                btnPlay.classList.add('hidden');
+                btnPause.classList.remove('hidden');
+                btnStep.disabled = true;
+                btnStep.classList.add('opacity-50', 'cursor-not-allowed');
+                // 如果之前卡在 Step 等待中，现在要直接释放让它跑
+                if (stepResolve) stepResolve();
+            }
+        }
+
+        function stopSorting() {
+            if (abortController) abortController.abort();
+            isSorting = false;
+            isPaused = false;
+            stepResolve = null;
+            
+            btnPlay.classList.remove('hidden');
+            btnPause.classList.add('hidden');
+            
+            btnGenerate.disabled = false;
+            btnPlay.disabled = false;
+            btnStep.disabled = true;
+            
+            sizeRange.disabled = false;
+            highlightLine(-1);
+        }
+
+        // ----------------------
+        // 工具函数
+        // ----------------------
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        function getDelay() {
+            const speed = parseInt(speedRange.value);
+            // 速度范围调整：让慢速更慢方便观察
+            return Math.max(50, 1500 - (speed * 14));
+        }
+
+        // ----------------------
+        // 视觉操作函数
+        // ----------------------
+        function generateArray() {
+            const size = parseInt(sizeRange.value);
+            container.innerHTML = '';
+            array = [];
+            bars = [];
+
+            for (let i = 0; i < size; i++) {
+                const value = Math.floor(Math.random() * 85) + 10;
+                array.push(value);
+
+                const bar = document.createElement('div');
+                bar.classList.add('bar');
+                bar.style.height = `${value}%`;
+                bar.title = `Index: ${i}, Value: ${value}`;
+                
+                // 可选：如果柱子够宽，显示数字
+                if (size <= 20) {
+                    bar.textContent = value;
+                    bar.style.display = 'flex';
+                    bar.style.alignItems = 'flex-end';
+                    bar.style.justifyContent = 'center';
+                    bar.style.fontSize = '12px';
+                    bar.style.paddingBottom = '4px';
+                    bar.style.color = 'rgba(255,255,255,0.8)';
+                }
+
+                container.appendChild(bar);
+                bars.push(bar);
+            }
+            
+            updateStatus("准备就绪 - 点击“自动播放”或“单步”开始", "text-yellow-300");
+            resetVars();
+        }
+
+        function updateBarVisual(index, type) {
+            if (!bars[index]) return;
+            const bar = bars[index];
+            
+            // 清除旧状态
+            bar.classList.remove('bar-active', 'bar-key', 'bar-sorted', 'bar-dim', 'bar-target');
+            
+            if (type === 'key') bar.classList.add('bar-key');
+            else if (type === 'compare') bar.classList.add('bar-active');
+            else if (type === 'target') bar.classList.add('bar-target');
+            else if (type === 'sorted') bar.classList.add('bar-sorted');
+            else if (type === 'dim') bar.classList.add('bar-dim');
+        }
+
+        function updateBarHeight(index, value) {
+            if (!bars[index]) return;
+            bars[index].style.height = `${value}%`;
+            bars[index].title = `Index: ${index}, Value: ${value}`;
+            // 更新文字
+            if (bars.length <= 20) bars[index].textContent = value;
+        }
+
+        function highlightLine(lineNum) {
+            document.querySelectorAll('.highlight-line').forEach(el => {
+                el.classList.remove('highlight-line');
+            });
+            if (lineNum > 0) {
+                const el = document.getElementById(`line-${lineNum}`);
+                if (el) {
+                    el.classList.add('highlight-line');
+                    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }
+        }
+
+        function updateStatus(text, colorClass) {
+            statusText.textContent = text;
+            statusText.className = `text-lg font-mono transition-all ${colorClass}`;
+        }
+
+        function resetVars() {
+            varGap.innerText = '-';
+            varI.innerText = '-';
+            varJ.innerText = '-';
+            varKey.innerText = '-';
+            highlightLine(-1);
+        }
+
+        // ----------------------
+        // 排序逻辑 (核心)
+        // ----------------------
+        async function shellSortVisual(signal) {
+            const n = array.length;
+            
+            highlightLine(1);
+            let gap = Math.floor(n / 2);
+            await checkControlState(signal); // 初始等待
+
+            // Gap 循环
+            highlightLine(3);
+            while (gap > 0) {
+                varGap.innerText = gap;
+                updateStatus(`Gap = ${gap}: 开始新一轮分组插入`, "text-blue-300");
+                await checkControlState(signal);
+
+                // 遍历无序区
+                highlightLine(5);
+                for (let i = gap; i < n; i++) {
+                    
+                    varI.innerText = i;
+                    varJ.innerText = '-';
+                    varKey.innerText = '-';
+                    
+                    // 1. 提取 Key
+                    let key = array[i];
+                    varKey.innerText = key;
+                    
+                    highlightLine(6);
+                    updateBarVisual(i, 'key'); // 标记 Key
+                    updateStatus(`提取 Key: ${key} (Index ${i})，准备向前比较`, "text-yellow-400");
+                    await checkControlState(signal);
+
+                    let j = i - gap;
+                    varJ.innerText = j;
+                    highlightLine(7);
+
+                    // 2. 比较循环
+                    highlightLine(9);
+                    while (j >= 0 && array[j] > key) {
+                        
+                        // 比较视觉
+                        updateBarVisual(j, 'compare'); 
+                        updateStatus(`比较: arr[${j}]=${array[j]} > key=${key}，需要后移`, "text-red-400");
+                        await checkControlState(signal);
+
+                        // 移动视觉：
+                        // 先把目标位置变成紫色 (表示即将被覆盖/写入)
+                        updateBarVisual(j + gap, 'target');
+                        updateStatus(`移动: 将 ${array[j]} 复制到位置 ${j+gap}`, "text-purple-300");
+                        await checkControlState(signal); // 这里多停顿一下，让用户看清“从哪去哪”
+
+                        // 执行移动
+                        array[j + gap] = array[j];
+                        updateBarHeight(j + gap, array[j]);
+                        highlightLine(10);
+                        
+                        // 移动后：新位置变成“刚移过来的颜色”，旧位置变暗（表示虽然值还在，但逻辑上已移走）
+                        updateBarVisual(j + gap, 'compare'); 
+                        updateBarVisual(j, 'dim');
+                        await checkControlState(signal);
+                        
+                        // 恢复颜色
+                        updateBarVisual(j + gap, 'normal');
+                        updateBarVisual(j, 'normal');
+
+                        j -= gap;
+                        varJ.innerText = j >= 0 ? j : 'Out';
+                        highlightLine(11);
+                    }
+
+                    // 3. 插入 Key
+                    highlightLine(13);
+                    updateBarVisual(j + gap, 'target');
+                    updateStatus(`位置找到: 将 Key (${key}) 插入到 Index ${j+gap}`, "text-green-400");
+                    await checkControlState(signal);
+
+                    array[j + gap] = key;
+                    updateBarHeight(j + gap, key);
+                    
+                    updateBarVisual(j + gap, 'key'); // 闪烁一下 Key
+                    await checkControlState(signal);
+                    
+                    updateBarVisual(j + gap, 'normal');
+                    if (i !== j + gap) updateBarVisual(i, 'normal'); // 如果 key 没动，也要恢复
+                }
+
+                gap = Math.floor(gap / 2);
+            }
+
+            highlightLine(16);
+            updateStatus("排序完成！", "text-green-500 font-bold");
+            resetVars();
+            for (let k = 0; k < n; k++) {
+                updateBarVisual(k, 'sorted');
+                await sleep(30);
+            }
+        }
+
+        // ----------------------
+        // 事件监听
+        // ----------------------
+        
+        // 生成
+        btnGenerate.addEventListener('click', () => {
+            if (isSorting) stopSorting();
+            generateArray();
+            btnPlay.disabled = false;
+            btnStep.disabled = false;
+        });
+
+        // 播放逻辑
+        btnPlay.addEventListener('click', async () => {
+            // 如果已经在排序中（暂停状态），则继续
+            if (isSorting) {
+                togglePause(false);
+                return;
+            }
+
+            // 新开始
+            if (array.length === 0) generateArray();
+            isSorting = true;
+            btnGenerate.disabled = true;
+            sizeRange.disabled = true;
+            
+            togglePause(false); // 设置为播放状态
+            
+            abortController = new AbortController();
+            
+            try {
+                await shellSortVisual(abortController.signal);
+            } catch (e) {
+                if (e.message !== 'Aborted') console.error(e);
+            } finally {
+                stopSorting();
+            }
+        });
+
+        // 暂停
+        btnPause.addEventListener('click', () => {
+            if (isSorting) togglePause(true);
+        });
+
+        // 单步
+        btnStep.addEventListener('click', () => {
+            // 如果没开始，先开始但立即暂停
+            if (!isSorting) {
+                if (array.length === 0) generateArray();
+                isSorting = true;
+                btnGenerate.disabled = true;
+                sizeRange.disabled = true;
+                abortController = new AbortController();
+                
+                togglePause(true); // 立即暂停
+                
+                // 启动异步任务
+                shellSortVisual(abortController.signal).catch(e => {
+                     if (e.message !== 'Aborted') console.error(e);
+                }).finally(() => stopSorting());
+                
+                return;
+            }
+
+            // 如果已经暂停，执行一步
+            if (isPaused) {
+                triggerStep();
+            } else {
+                // 如果正在自动播放，点击单步则先暂停
+                togglePause(true);
+            }
+        });
+
+        sizeRange.addEventListener('input', () => {
+            if (!isSorting) generateArray();
+        });
+
+        // 初始化
+        generateArray();
+        // 初始状态允许点击单步来启动
+        btnStep.disabled = false; 
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ Thunk 机制深度可视化</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e2e; color: #e0e0e0; }
+        
+        /* 内存块样式 */
+        .memory-cell {
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        .memory-cell:hover { transform: scale(1.02); z-index: 10; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        
+        /* 连线层 */
+        #svg-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 20;
+        }
+
+        /* 动态指针样式 */
+        #active-pointer {
+            transition: top 1.0s cubic-bezier(0.25, 1, 0.5, 1), left 0.5s, opacity 0.3s;
+            z-index: 50;
+        }
+
+        /* Thunk 代码窗口 */
+        #thunk-window {
+            opacity: 0;
+            transform: scale(0.9);
+            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        #thunk-window.active {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        /* 动画类 */
+        .highlight-line { background-color: #3b82f6 !important; color: white !important; }
+        .highlight-flash { animation: flash 1s infinite; border-color: #f59e0b !important; background-color: #451a03 !important; }
+        
+        @keyframes flash {
+            0% { opacity: 1; }
+            50% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
+
+        .target-marker {
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        @keyframes popIn {
+            0% { opacity: 0; transform: translateX(20px); }
+            100% { opacity: 1; transform: translateX(0); }
+        }
+
+        /* 代码高亮 */
+        .code-keyword { color: #c678dd; }
+        .code-type { color: #e5c07b; }
+        .code-func { color: #61afef; }
+        .code-comment { color: #7f848e; font-style: italic; }
+    </style>
+</head>
+<body class="overflow-x-hidden h-screen flex flex-col">
+
+    <!-- 顶部控制栏 -->
+    <div class="fixed top-0 left-0 w-full bg-slate-900 border-b border-slate-700 p-4 shadow-lg z-50 flex justify-between items-center">
+        <div>
+            <h1 class="text-xl font-bold text-blue-400">C++ Thunk (中转函数) 机制深度解析</h1>
+            <p class="text-xs text-gray-400 font-mono">场景：BaseX 视角调用虚函数 -> 触发 Thunk -> 调整 this -> 跳转实现</p>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="resetDemo()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded transition text-sm">重置</button>
+            <button onclick="nextStep()" id="btn-next" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold shadow-lg transition flex items-center gap-2 text-white">
+                下一步 <span id="step-desc" class="text-xs font-normal opacity-80">(开始演示)</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="flex-1 container mx-auto mt-24 px-4 pb-10 relative grid grid-cols-12 gap-6">
+        <svg id="svg-layer"></svg>
+
+        <!-- 左侧：代码区 -->
+        <div class="col-span-3 space-y-4">
+            <div class="bg-slate-800 rounded-lg p-4 text-xs text-gray-300 font-mono shadow-xl border border-slate-700">
+                <div class="mb-2 text-xs text-blue-400 font-bold border-b border-slate-600 pb-1">C++ 源码</div>
+<pre>
+<span class="code-keyword">class</span> <span class="code-type">Base1</span> { ... };
+
+<span class="code-keyword">class</span> <span class="code-type">Base2</span> {
+  int b2;
+  <span id="code-f3" class="transition bg-transparent px-1 rounded">virtual void f();</span>
+};
+
+<span class="code-keyword">class</span> <span class="code-type">Derived</span> : <span class="code-keyword">public</span> Base1, <span class="code-keyword">public</span> Base2 {
+  int d;
+  <span id="code-f3-impl" class="transition bg-transparent px-1 rounded">void f() override;</span>
+};
+
+// Main
+Derived obj;
+<span id="code-cast" class="transition bg-transparent px-1 rounded">Base2* ptr = &obj;</span>
+<span id="code-call" class="transition bg-transparent px-1 rounded">ptr->f();</span>
+</pre>
+            </div>
+            
+            <div id="explanation-box" class="bg-slate-800 border-l-4 border-blue-500 p-4 text-gray-300 text-sm shadow-md transition-all">
+                点击右上角的“下一步”开始观察 Thunk 如何介入。
+            </div>
+        </div>
+
+        <!-- 中间：内存布局 -->
+        <div class="col-span-4 flex flex-col items-center relative pt-10">
+            
+            <!-- 外部指针可视化 -->
+            <div id="active-pointer" class="absolute -left-10 top-32 flex items-center gap-2 transition-all opacity-0">
+                <div id="pointer-label" class="bg-red-600 text-white text-xs px-2 py-1 rounded font-mono shadow-md transition-colors duration-500">Base2* ptr</div>
+                <div id="pointer-arrow" class="text-red-600 text-2xl transition-colors duration-500">➜</div>
+            </div>
+
+            <!-- 对象内存块 -->
+            <div id="memory-block" class="w-64 bg-slate-200 border-2 border-slate-600 rounded-lg overflow-hidden shadow-2xl relative text-slate-800">
+                
+                <!-- 内存地址标尺 -->
+                <div id="addr-1000" class="absolute -left-14 top-0 text-xs text-gray-500 font-mono transition-colors duration-500">0x1000</div>
+                <div id="addr-1010" class="absolute -left-14 top-[108px] text-xs text-gray-500 font-mono transition-colors duration-500">0x1010</div>
+
+                <!-- Base 1 Subobject -->
+                <div id="block-base1" class="bg-blue-100 border-b-2 border-dashed border-blue-300 p-2 relative transition-colors duration-500">
+                    <span class="absolute right-2 top-1 text-[10px] text-blue-800 font-bold uppercase">Base1 (Offset 0)</span>
+                    
+                    <div class="h-10 border-2 border-blue-400 bg-white mb-1 flex items-center justify-between px-3 rounded text-slate-400 opacity-50">
+                        <span class="font-mono text-sm font-bold">vptr_Base1</span>
+                    </div>
+                    <div class="h-8 border border-gray-300 bg-gray-50 flex items-center justify-center text-xs text-gray-500 rounded">
+                        int b1
+                    </div>
+                </div>
+
+                <!-- Base 2 Subobject -->
+                <div class="bg-green-100 border-b-2 border-dashed border-green-300 p-2 relative">
+                    <span class="absolute right-2 top-1 text-[10px] text-green-800 font-bold uppercase">Base2 (Offset 16)</span>
+                    
+                    <div id="mem-vptr2" class="h-10 border-2 border-green-500 bg-white mb-1 flex items-center justify-between px-3 rounded cursor-pointer transition z-20 relative">
+                        <span class="font-mono text-sm font-bold text-green-900">vptr_Base2</span>
+                        <div class="w-2 h-2 rounded-full bg-green-500 connector-dot" id="dot-vptr2"></div>
+                    </div>
+                    <div class="h-8 border border-gray-300 bg-gray-50 flex items-center justify-center text-xs text-gray-500 rounded">
+                        int b2
+                    </div>
+                </div>
+
+                <!-- Derived Members -->
+                <div class="bg-purple-100 p-2 relative">
+                    <span class="absolute right-2 top-1 text-[10px] text-purple-800 font-bold uppercase">Derived</span>
+                    <div class="h-8 border border-gray-300 bg-gray-50 flex items-center justify-center text-xs text-gray-500 rounded">
+                        int d
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：虚函数表 & Thunk -->
+        <div class="col-span-5 relative pt-12">
+            
+            <!-- VTable 2 -->
+            <div class="relative mb-12">
+                <h3 class="font-bold text-green-400 mb-2 text-sm ml-4">vtable for Base2-in-Derived</h3>
+                <div id="vtable-2" class="bg-slate-800 border-2 border-green-700 rounded-lg shadow-md w-full ml-4 relative overflow-hidden">
+                    <div class="absolute -left-3 top-6 w-3 h-0.5 bg-green-500" id="target-vptr2"></div>
+                    
+                    <!-- Thunk Entry -->
+                    <div id="entry-thunk" class="flex border-b border-slate-600 p-3 bg-slate-700 transition relative">
+                        <span class="font-mono text-xs text-gray-500 w-8 pt-1">+0</span>
+                        <div class="flex flex-col w-full">
+                            <span class="font-mono text-sm text-yellow-400 font-bold flex items-center justify-between">
+                                &amp;__thunk_for_Derived_f
+                                <span class="text-[10px] bg-yellow-900 text-yellow-200 px-1 rounded border border-yellow-700">Thunk</span>
+                            </span>
+                            <span class="text-[10px] text-gray-400">指向一个编译器生成的辅助函数</span>
+                        </div>
+                    </div>
+
+                    <div class="flex p-3 opacity-50">
+                        <span class="font-mono text-xs text-gray-500 w-8">+8</span>
+                        <span class="font-mono text-sm text-gray-400">Base2::type_info</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Thunk Code Window (The star of the show) -->
+            <div id="thunk-window" class="absolute top-36 -left-12 w-[110%] bg-gray-900 rounded-lg shadow-2xl border border-yellow-600 z-50 overflow-hidden font-mono text-sm">
+                <div class="bg-yellow-800 px-3 py-1 text-xs text-white font-bold flex justify-between items-center">
+                    <span>ASSEMBLY / PSEUDO CODE</span>
+                    <span>__thunk_for_Derived_f</span>
+                </div>
+                <div class="p-4 space-y-2">
+                    <div id="thunk-line-1" class="px-2 py-1 rounded transition-colors flex items-center gap-4">
+                        <span class="text-gray-500">0x4080:</span> 
+                        <span class="text-purple-400 font-bold">sub</span> 
+                        <span class="text-gray-300">rcx, 16</span>
+                        <span class="text-gray-500 text-xs ml-auto">// this -= sizeof(Base1)</span>
+                    </div>
+                    <div id="thunk-line-2" class="px-2 py-1 rounded transition-colors flex items-center gap-4">
+                        <span class="text-gray-500">0x4084:</span> 
+                        <span class="text-blue-400 font-bold">jmp</span> 
+                        <span class="text-gray-300">Derived::f</span>
+                        <span class="text-gray-500 text-xs ml-auto">// 跳转到真实实现</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // === 逻辑控制 ===
+        let currentStep = 0;
+        
+        const steps = [
+            {
+                desc: "1. 初始状态：指针指向子对象 Base2",
+                action: () => {
+                    const ptr = document.getElementById('active-pointer');
+                    ptr.style.opacity = '1';
+                    ptr.style.top = '150px'; // 定位到 0x1010
+                    
+                    highlightCode('code-cast');
+                    updateExplain("<b>上下文：</b><br/><code>ptr</code> 指向 Derived 对象中的 <b>Base2 子对象</b> (地址 0x1010)。<br/>从 Base2 的视角看，它认为自己只是一个普通的 Base2 对象。");
+                }
+            },
+            {
+                desc: "2. 虚函数调用：查表",
+                action: () => {
+                    highlightCode('code-call');
+                    // 指向 vptr
+                    document.getElementById('mem-vptr2').classList.add('highlight-flash');
+                    
+                    setTimeout(() => {
+                        document.getElementById('mem-vptr2').classList.remove('highlight-flash');
+                        drawArrow('dot-vptr2', 'target-vptr2', '#22c55e');
+                        document.getElementById('vtable-2').classList.add('ring-2', 'ring-green-500');
+                    }, 800);
+
+                    updateExplain("<b>动态绑定：</b><br/>程序通过 <code>vptr</code> 找到虚表。<br/>注意：因为当前 <code>this</code> 指向 Base2 子对象，所以使用的是 <b>Base2-in-Derived</b> 的特化虚表。");
+                }
+            },
+            {
+                desc: "3. 命中 Thunk 条目",
+                action: () => {
+                    document.getElementById('entry-thunk').style.backgroundColor = '#3f6212'; // dark green
+                    document.getElementById('entry-thunk').classList.add('ring-2', 'ring-yellow-500', 'z-10');
+                    updateExplain("<b>关键点：</b><br/>虚表槽位中并没有直接存放 <code>Derived::f</code> 的地址，而是存放了 <b>Thunk (中转函数)</b> 的地址。<br/>CPU 此时跳转到这段“胶水代码”执行。");
+                }
+            },
+            {
+                desc: "4. 执行 Thunk：调整指针 (this adjustment)",
+                action: () => {
+                    // 激活 Thunk 窗口
+                    document.getElementById('thunk-window').classList.add('active');
+                    
+                    setTimeout(() => {
+                        // 高亮第一行代码
+                        document.getElementById('thunk-line-1').classList.add('highlight-line');
+                        
+                        // 移动指针
+                        const ptr = document.getElementById('active-pointer');
+                        ptr.style.top = '40px'; // 移动到 0x1000
+                        
+                        // 添加动态标签
+                        const badge = document.createElement('div');
+                        badge.innerText = "-16 bytes";
+                        badge.className = "absolute left-28 top-2 bg-yellow-600 text-white text-xs font-bold px-2 py-1 rounded animate-pulse z-50 whitespace-nowrap shadow-sm";
+                        ptr.appendChild(badge);
+
+                    }, 600);
+                    
+                    updateExplain("<b>Step 1: 指针调整</b><br/>Thunk 的第一条指令：<code>sub rcx, 16</code>。<br/>它将 <code>this</code> 指针从 <b>0x1010</b> 减去 16 字节，使其指向 <b>0x1000</b> (即 Derived 对象的真正起始地址)。");
+                }
+            },
+            {
+                desc: "5. 执行 Thunk：跳转真实实现",
+                action: () => {
+                    // 去掉第一行高亮，高亮第二行
+                    document.getElementById('thunk-line-1').classList.remove('highlight-line');
+                    document.getElementById('thunk-line-2').classList.add('highlight-line');
+                    
+                    // 改变指针状态
+                    setTimeout(() => {
+                        const ptrLabel = document.getElementById('pointer-label');
+                        ptrLabel.innerText = "this (Derived*)";
+                        ptrLabel.className = "bg-purple-600 text-white text-xs px-2 py-1 rounded font-mono shadow-md transition-colors duration-500";
+                        document.getElementById('pointer-arrow').className = "text-purple-600 text-2xl transition-colors duration-500";
+                        
+                        // 标记到达
+                        const memBlock = document.getElementById('memory-block');
+                        const arrivedLabel = document.createElement('div');
+                        arrivedLabel.className = "absolute -right-40 top-4 text-purple-400 font-bold text-sm bg-slate-800 px-2 py-1 border border-purple-500 rounded shadow target-marker";
+                        arrivedLabel.innerText = "👈 Correct 'this'";
+                        memBlock.appendChild(arrivedLabel);
+                        
+                        // 高亮源码实现
+                        highlightCode('code-f3-impl');
+                        document.getElementById('code-f3-impl').style.backgroundColor = '#6b21a8'; // purple
+                        
+                    }, 500);
+
+                    updateExplain("<b>Step 2: 跳转</b><br/><code>this</code> 指针修正完毕后，Thunk 执行 <code>jmp Derived::f</code>。<br/>现在函数体内部可以安全地通过偏移量访问 <code>Derived</code> 的成员变量 <code>d</code> 或基类成员 <code>b1</code> 了。");
+                }
+            }
+        ];
+
+        function nextStep() {
+            if (currentStep < steps.length) {
+                const step = steps[currentStep];
+                document.getElementById('step-desc').innerText = `(${currentStep + 1}/${steps.length})`;
+                step.action();
+                currentStep++;
+            } else {
+                alert("演示结束。这就是多重继承下“指针调整”的奥秘！");
+            }
+        }
+
+        function resetDemo() {
+            currentStep = 0;
+            document.getElementById('step-desc').innerText = "(准备开始)";
+            const ptr = document.getElementById('active-pointer');
+            ptr.style.opacity = '0';
+            ptr.style.top = '32px';
+            
+            // 重置指针
+            ptr.innerHTML = `
+                <div id="pointer-label" class="bg-red-600 text-white text-xs px-2 py-1 rounded font-mono shadow-md transition-colors duration-500">Base2* ptr</div>
+                <div id="pointer-arrow" class="text-red-600 text-2xl transition-colors duration-500">➜</div>
+            `;
+            
+            // 清除各种样式
+            document.querySelectorAll('.highlight-flash').forEach(el => el.classList.remove('highlight-flash'));
+            document.querySelectorAll('.highlight-line').forEach(el => el.classList.remove('highlight-line'));
+            document.getElementById('vtable-2').classList.remove('ring-2', 'ring-green-500');
+            
+            const entryThunk = document.getElementById('entry-thunk');
+            entryThunk.style.backgroundColor = '';
+            entryThunk.classList.remove('ring-2', 'ring-yellow-500', 'z-10');
+            
+            document.getElementById('thunk-window').classList.remove('active');
+            
+            document.getElementById('code-f3-impl').style.backgroundColor = 'transparent';
+            
+            const marker = document.querySelector('.target-marker');
+            if(marker) marker.remove();
+
+            // 清除 SVG
+            document.getElementById('svg-layer').innerHTML = '';
+            
+            // 清除代码高亮
+            ['code-cast', 'code-call', 'code-f3-impl'].forEach(id => {
+                const el = document.getElementById(id);
+                if(el) el.style.backgroundColor = 'transparent';
+            });
+
+            updateExplain("点击“下一步”开始观察 Thunk 如何介入。");
+        }
+
+        function updateExplain(html) {
+            const box = document.getElementById('explanation-box');
+            box.style.opacity = 0;
+            setTimeout(() => {
+                box.innerHTML = html;
+                box.style.opacity = 1;
+            }, 200);
+        }
+
+        function highlightCode(id) {
+            document.querySelectorAll('[id^="code-"]').forEach(el => el.style.backgroundColor = 'transparent');
+            const el = document.getElementById(id);
+            if(el) {
+                el.style.backgroundColor = '#334155';
+                el.style.color = 'white';
+            }
+        }
+
+        function drawArrow(startId, endId, color) {
+            const svg = document.getElementById('svg-layer');
+            const startElem = document.getElementById(startId);
+            const endElem = document.getElementById(endId);
+
+            if (!startElem || !endElem) return;
+
+            const startRect = startElem.getBoundingClientRect();
+            const endRect = endElem.getBoundingClientRect();
+            const containerRect = svg.getBoundingClientRect();
+
+            const x1 = startRect.left + startRect.width / 2 - containerRect.left;
+            const y1 = startRect.top + startRect.height / 2 - containerRect.top;
+            const x2 = endRect.left - containerRect.left;
+            const y2 = endRect.top + endRect.height / 2 - containerRect.top;
+
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            
+            const controlX1 = x1 + (x2 - x1) / 2;
+            const controlY1 = y1;
+            const controlX2 = x1 + (x2 - x1) / 2;
+            const controlY2 = y2;
+
+            const d = `M ${x1} ${y1} C ${controlX1} ${controlY1}, ${controlX2} ${controlY2}, ${x2} ${y2}`;
+            
+            path.setAttribute("d", d);
+            path.setAttribute("stroke", color);
+            path.setAttribute("stroke-width", "2");
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke-dasharray", "1000");
+            path.setAttribute("stroke-dashoffset", "1000");
+            
+            svg.appendChild(path);
+
+            // 连线动画
+            path.style.transition = "stroke-dashoffset 0.8s ease-out";
+            setTimeout(() => {
+                path.setAttribute("stroke-dashoffset", "0");
+            }, 10);
+        }
+
+        window.onload = resetDemo;
+        window.onresize = () => {
+            document.getElementById('svg-layer').innerHTML = '';
+            if(currentStep > 1) drawArrow('dot-vptr2', 'target-vptr2', '#22c55e');
+        };
+    </script>
+</body>
+</html>

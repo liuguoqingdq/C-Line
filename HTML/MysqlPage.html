@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InnoDB 页结构可视化 (物理+逻辑)</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9; }
+        .memory-block { transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+        .scan-line {
+            background: linear-gradient(to bottom, transparent, rgba(59, 130, 246, 0.1), transparent);
+        }
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .hex-font { font-family: 'Menlo', 'Monaco', 'Courier New', monospace; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // 图标组件
+        const InfoIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>;
+        const ArrowDown = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>;
+        const ArrowUp = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>;
+        const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+        const RefreshIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>;
+        const LinkIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>;
+        const BoxIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>;
+        const HashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>;
+        const CpuIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>;
+
+        const PageStructureDemo = () => {
+            // --- 状态定义 ---
+            const [records, setRecords] = useState([]);
+            // 初始化 Slot，增加 offset 属性模拟 2 字节偏移量
+            const [slots, setSlots] = useState([
+                { id: 0, desc: 'Infimum', type: 'sys', offset: '0x0063', target: 'Infimum' },
+                { id: 1, desc: 'Supremum', type: 'sys', offset: '0x0070', target: 'Supremum' }
+            ]);
+            const [selectedSection, setSelectedSection] = useState('PAGE_OVERVIEW');
+            const [freeSpace, setFreeSpace] = useState(100);
+            
+            // 记录结构演示的高亮状态
+            const [hoveredHexPart, setHoveredHexPart] = useState(null);
+
+            // --- 区域详情数据 ---
+            const SECTION_INFO = {
+                'PAGE_OVERVIEW': {
+                    title: 'InnoDB 页 (Page) 概览',
+                    desc: '这是 InnoDB 磁盘管理的最小单位。左侧展示了其物理存储结构（Physical Layout），即数据在磁盘上是如何字节挨着字节存放的；右侧展示了其逻辑结构（Logical Structure），即数据是如何通过指针连接的。',
+                    details: [
+                        '物理结构: 堆 (Heap)，从两头向中间生长。',
+                        '逻辑结构: 双向链表 (页与页) + 单向链表 (页内记录)。',
+                    ]
+                },
+                'FILE_HEADER': {
+                    title: '1. File Header (文件头)',
+                    desc: '物理上位于页的最前端，逻辑上它定义了页面在 B+ 树中的“人际关系”。',
+                    details: [
+                        'FIL_PAGE_PREV: 指向前一个页面的指针。',
+                        'FIL_PAGE_NEXT: 指向后一个页面的指针。',
+                        '逻辑意义: 构成了 B+ 树叶子节点的双向链表，支持范围查询 (Range Scan)。'
+                    ],
+                    color: 'bg-slate-700'
+                },
+                'PAGE_HEADER': {
+                    title: '2. Page Header (页头)',
+                    desc: '记录页面的状态元数据。',
+                    details: [
+                        'PAGE_N_DIR_SLOTS: 目录槽数量。',
+                        'PAGE_HEAP_TOP: 空闲空间偏移量。',
+                        'PAGE_N_RECS: 用户记录数量。'
+                    ],
+                    color: 'bg-slate-600'
+                },
+                'SYS_RECORDS': {
+                    title: '3. Infimum & Supremum',
+                    desc: '逻辑链表的“哨兵”。',
+                    details: [
+                        'Infimum: 链表虚拟起点，比任何用户记录都小。',
+                        'Supremum: 链表虚拟终点，比任何用户记录都大。',
+                        '逻辑结构: Infimum -> Rec1 -> Rec2 -> ... -> Supremum'
+                    ],
+                    color: 'bg-yellow-600'
+                },
+                'USER_RECORDS': {
+                    title: '4. User Records (用户记录)',
+                    desc: '对于变长字段 (如 VARCHAR) 和 NULL 值，InnoDB 使用 Compact 行格式进行精细存储。下方提供了一个真实数据的 Hex 解码示例。',
+                    details: [
+                        '变长字段列表: 记录每个变长列的长度 (逆序存储)。',
+                        'NULL标志位: 标记哪些列是 NULL。',
+                        '记录头: 包含 next_record, delete_mask 等。',
+                        '数据内容: 紧凑排列，节省空间。'
+                    ],
+                    color: 'bg-green-600'
+                },
+                'FREE_SPACE': {
+                    title: '5. Free Space (空闲空间)',
+                    desc: '物理上存在的未分配字节。',
+                    details: [
+                        '分配策略: 从上往下。',
+                        '页重组: 当碎片过多时，InnoDB 会整理物理空间，让记录物理顺序也变得有序。'
+                    ],
+                    color: 'bg-gray-100'
+                },
+                'PAGE_DIRECTORY': {
+                    title: '6. Page Directory (页目录)',
+                    desc: '物理上在页尾，每个槽占用 2 字节。这里存储的是“地址偏移量”。',
+                    details: [
+                        '内容: 2 字节的相对偏移量 (Offset)。',
+                        '指向: 该组主键最大的那条记录的物理地址。',
+                        '作用: 拿到偏移量 -> 内存跳转 -> 二分查找。'
+                    ],
+                    color: 'bg-red-600'
+                },
+                'FILE_TRAILER': {
+                    title: '7. File Trailer',
+                    desc: '页面的完整性校验尾部。',
+                    details: [
+                        'Checksum: 校验和。',
+                        'LSN: 日志序列号。'
+                    ],
+                    color: 'bg-slate-800'
+                }
+            };
+
+            // --- 交互逻辑 ---
+            const handleAddRecord = () => {
+                if (records.length >= 16) {
+                    alert("页面已满！通常此时会触发 B+ 树的页分裂 (Page Split)。");
+                    return;
+                }
+
+                const newId = records.length + 1;
+                // 模拟插入：为了演示逻辑链表，我们插入的数据也是有序的
+                const newRec = { id: newId, val: `Row ${newId * 10}` };
+                
+                const newRecords = [...records, newRec];
+                setRecords(newRecords);
+
+                // 重新计算所有 Slots
+                let newSlots = [{ id: 0, desc: 'Infimum', type: 'sys', offset: '0x0063', target: 'Infimum' }];
+                
+                // 假设每 4 条一组
+                for (let i = 0; i < newRecords.length; i += 4) {
+                    // 找到这组的最后一条 (最大)
+                    let groupEndIdx = Math.min(i + 3, newRecords.length - 1);
+                    
+                    if (groupEndIdx === i + 3) {
+                        const targetRec = newRecords[groupEndIdx];
+                        const offset = '0x' + (256 + targetRec.id * 32).toString(16).toUpperCase().padStart(4, '0');
+                        newSlots.push({ 
+                            id: newSlots.length, 
+                            desc: `Row ${targetRec.id * 10}`, 
+                            type: 'user', 
+                            offset: offset,
+                            target: `Row ${targetRec.id * 10}`
+                        });
+                    }
+                }
+
+                // Supremum 始终有槽
+                newSlots.push({ 
+                    id: newSlots.length, 
+                    desc: 'Supremum', 
+                    type: 'sys', 
+                    offset: '0x0070', // Supremum offset usually fixed relative to header
+                    target: 'Supremum'
+                });
+
+                setSlots(newSlots);
+
+                setFreeSpace(prev => prev - 5);
+                setSelectedSection('USER_RECORDS');
+            };
+
+            const handleReset = () => {
+                setRecords([]);
+                setSlots([
+                    { id: 0, desc: 'Infimum', type: 'sys', offset: '0x0063', target: 'Infimum' },
+                    { id: 1, desc: 'Supremum', type: 'sys', offset: '0x0070', target: 'Supremum' }
+                ]);
+                setFreeSpace(100);
+                setSelectedSection('PAGE_OVERVIEW');
+            };
+
+            // 左侧物理块组件
+            const PhysicalBlock = ({ id, label, heightClass, colorClass, textColor = 'text-white', children, onClick }) => {
+                const isSelected = selectedSection === id;
+                return (
+                    <div 
+                        onClick={() => { setSelectedSection(id); onClick && onClick(); }}
+                        className={`
+                            ${heightClass} ${isSelected ? colorClass : colorClass.replace('bg-', 'bg-opacity-80 bg-')} 
+                            ${isSelected ? 'ring-4 ring-blue-300 z-10 scale-[1.02]' : 'hover:opacity-90'}
+                            w-full border-b border-white/10 shadow-sm cursor-pointer transition-all relative group
+                            flex flex-col justify-center items-center text-center shrink-0
+                        `}
+                    >
+                        <span className={`font-mono font-bold text-[10px] md:text-xs ${textColor} uppercase tracking-wider`}>{label}</span>
+                        {children}
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen p-4 flex flex-col xl:flex-row gap-6 max-w-[1400px] mx-auto">
+                    
+                    {/* 左侧：物理视图 (Physical Layout) */}
+                    <div className="flex flex-col items-center gap-2 w-full xl:w-80 shrink-0">
+                        <div className="flex items-center justify-between w-full mb-1 px-1">
+                             <h2 className="text-lg font-bold text-slate-700 flex items-center gap-2">
+                                <BoxIcon className="text-blue-500"/> 物理视图
+                             </h2>
+                             <span className="text-[10px] bg-slate-200 px-2 py-0.5 rounded text-slate-500">Address Space</span>
+                        </div>
+
+                        {/* 内存条容器 */}
+                        <div className="w-full h-[650px] bg-white border-2 border-slate-300 rounded-lg shadow-xl flex flex-col overflow-hidden relative">
+                            <PhysicalBlock id="FILE_HEADER" label="File Header" heightClass="h-10" colorClass="bg-slate-700">
+                                <span className="text-[10px] text-slate-400">38B</span>
+                            </PhysicalBlock>
+
+                            <PhysicalBlock id="PAGE_HEADER" label="Page Header" heightClass="h-12" colorClass="bg-slate-600">
+                                <span className="text-[10px] text-slate-400">56B</span>
+                            </PhysicalBlock>
+
+                            <PhysicalBlock id="SYS_RECORDS" label="Infimum/Supremum" heightClass="h-8" colorClass="bg-yellow-600" />
+
+                            {/* User Records (Dynamic) */}
+                            <div 
+                                onClick={() => setSelectedSection('USER_RECORDS')}
+                                className={`
+                                    w-full bg-green-100 border-b border-green-200 transition-all duration-500 cursor-pointer relative overflow-hidden flex flex-col items-center
+                                    ${selectedSection === 'USER_RECORDS' ? 'ring-2 ring-blue-400 z-10' : ''}
+                                `}
+                                style={{ flexGrow: 0, minHeight: Math.max(20, records.length * 20) + 'px' }}
+                            >
+                                <div className="w-full bg-green-600 text-white text-[10px] py-0.5 text-center font-bold sticky top-0 z-10 opacity-90">
+                                    USER RECORDS ↓
+                                </div>
+                                <div className="w-full p-0.5 space-y-0.5">
+                                    {records.map((r, i) => (
+                                        <div key={r.id} className="h-4 bg-green-500 text-white text-[10px] flex items-center justify-center rounded border border-green-400">
+                                            {r.val}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Free Space */}
+                            <div 
+                                onClick={() => setSelectedSection('FREE_SPACE')}
+                                className={`
+                                    w-full flex-1 bg-[url('https://www.transparenttextures.com/patterns/diagonal-stripes.png')] bg-gray-100 
+                                    transition-all duration-500 relative cursor-pointer flex items-center justify-center group
+                                    ${selectedSection === 'FREE_SPACE' ? 'ring-2 ring-blue-400 inset-shadow' : ''}
+                                `}
+                            >
+                                <span className="text-gray-300 text-xs font-bold rotate-90 whitespace-nowrap">FREE SPACE</span>
+                            </div>
+
+                            {/* Page Directory */}
+                            <div 
+                                onClick={() => setSelectedSection('PAGE_DIRECTORY')}
+                                className={`
+                                    w-full bg-red-50 border-t border-red-200 transition-all duration-500 cursor-pointer relative flex flex-col-reverse
+                                    ${selectedSection === 'PAGE_DIRECTORY' ? 'ring-2 ring-blue-400 z-10' : ''}
+                                `}
+                                style={{ minHeight: (slots.length * 24 + 30) + 'px' }}
+                            >
+                                <div className="w-full bg-red-600 text-white text-[10px] py-0.5 text-center font-bold z-10 opacity-90 shrink-0">
+                                    PAGE DIRECTORY ↑
+                                </div>
+                                <div className="w-full p-1 space-y-1 flex flex-col-reverse">
+                                    {slots.map((s, i) => (
+                                        <div key={i} className="h-5 bg-red-500 text-white text-[10px] flex items-center justify-between px-2 rounded border border-red-400 font-mono shadow-sm">
+                                            <span>Slot{i}</span>
+                                            <span className="font-bold text-yellow-200">{s.offset}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <PhysicalBlock id="FILE_TRAILER" label="Trailer" heightClass="h-8" colorClass="bg-slate-800" />
+                        </div>
+                    </div>
+
+                    {/* 右侧：逻辑视图与详情 (Logical View & Details) */}
+                    <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+                        
+                        {/* 1. 逻辑结构可视化面板 */}
+                        <div className="bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden shrink-0">
+                            <div className="bg-slate-50 border-b border-slate-100 px-4 py-2 flex items-center gap-2">
+                                <LinkIcon className="text-purple-500" />
+                                <h3 className="font-bold text-slate-700 text-sm">逻辑结构 (Logical Structure)</h3>
+                            </div>
+                            
+                            <div className="p-4 space-y-6">
+                                {/* A. 页级别：双向链表 */}
+                                <div className="space-y-2 opacity-60 hover:opacity-100 transition-opacity">
+                                    <div className="text-[10px] text-slate-400 uppercase font-bold">1. B+ 树层级: 双向链表 (Doubly Linked List)</div>
+                                    <div className="flex items-center gap-2 overflow-x-auto pb-2">
+                                        <div className="w-24 h-12 border-2 border-dashed border-slate-300 rounded bg-slate-50 flex items-center justify-center text-slate-400 text-xs shrink-0">
+                                            Page N-1
+                                        </div>
+                                        <div className="flex flex-col items-center text-slate-400 text-xs">
+                                            <span>prev</span>
+                                            <div className="w-6 h-px bg-slate-300"></div>
+                                            <span>next</span>
+                                        </div>
+                                        <div className={`w-32 h-16 border-2 border-slate-600 bg-white rounded shadow-sm flex flex-col items-center justify-center text-slate-700 text-sm font-bold shrink-0`}>
+                                            Current Page
+                                            <span className="text-[10px] font-normal text-slate-500">Page ID: 105</span>
+                                        </div>
+                                        <div className="flex flex-col items-center text-slate-400 text-xs">
+                                            <span>prev</span>
+                                            <div className="w-6 h-px bg-slate-300"></div>
+                                            <span>next</span>
+                                        </div>
+                                        <div className="w-24 h-12 border-2 border-dashed border-slate-300 rounded bg-slate-50 flex items-center justify-center text-slate-400 text-xs shrink-0">
+                                            Page N+1
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* B. 记录级别：单向链表 */}
+                                <div className="space-y-2">
+                                    <div className="text-[10px] text-slate-400 uppercase font-bold">2. 页内记录: 单向链表 (Singly Linked List)</div>
+                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 overflow-x-auto">
+                                        <div className="flex items-center gap-2 min-w-max">
+                                            {/* Infimum */}
+                                            <div className={`
+                                                px-3 py-2 rounded border transition-all flex items-center gap-2
+                                                ${selectedSection === 'SYS_RECORDS' ? 'bg-yellow-100 border-yellow-500 text-yellow-800' : 'bg-white border-slate-300 text-slate-600'}
+                                            `}>
+                                                <div className="w-2 h-2 rounded-full bg-slate-400"></div>
+                                                <span className="text-xs font-bold">Infimum</span>
+                                            </div>
+
+                                            {/* User Records Linked List */}
+                                            {records.map((r, i) => (
+                                                <React.Fragment key={r.id}>
+                                                    <div className="text-slate-400">→</div>
+                                                    <div className={`
+                                                        px-3 py-2 rounded border transition-all flex flex-col items-center min-w-[80px]
+                                                        ${selectedSection === 'USER_RECORDS' ? 'bg-green-100 border-green-500 text-green-800 scale-105' : 'bg-white border-slate-300 text-slate-600'}
+                                                    `}>
+                                                        <span className="text-xs font-bold">{r.val}</span>
+                                                    </div>
+                                                </React.Fragment>
+                                            ))}
+
+                                            <div className="text-slate-400">→</div>
+
+                                            {/* Supremum */}
+                                            <div className={`
+                                                px-3 py-2 rounded border transition-all flex items-center gap-2
+                                                ${selectedSection === 'SYS_RECORDS' ? 'bg-yellow-100 border-yellow-500 text-yellow-800' : 'bg-white border-slate-300 text-slate-600'}
+                                            `}>
+                                                <span className="text-xs font-bold">Supremum</span>
+                                                <div className="w-2 h-2 rounded-full bg-slate-400"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* C. 页目录映射 */}
+                                <div className={`space-y-2 transition-all duration-500 ${selectedSection === 'PAGE_DIRECTORY' ? 'opacity-100 max-h-96' : 'opacity-50 max-h-40 grayscale'}`}>
+                                    <div className="text-[10px] text-slate-400 uppercase font-bold flex items-center gap-2">
+                                        3. 页目录映射 (Directory Mapping) <HashIcon className="w-3 h-3"/>
+                                    </div>
+                                    <div className={`bg-slate-50 border border-slate-100 rounded-lg p-3 overflow-x-auto ${selectedSection === 'PAGE_DIRECTORY' ? 'ring-2 ring-red-200 bg-red-50' : ''}`}>
+                                        <div className="flex gap-4 min-w-max">
+                                            {slots.map((s, i) => (
+                                                <div key={i} className="flex flex-col items-center group">
+                                                    {/* 槽本体 */}
+                                                    <div className={`
+                                                        w-20 h-10 border-2 rounded flex flex-col items-center justify-center text-xs font-mono shadow-sm z-10
+                                                        ${selectedSection === 'PAGE_DIRECTORY' ? 'bg-red-500 border-red-600 text-white' : 'bg-slate-200 border-slate-300 text-slate-500'}
+                                                    `}>
+                                                        <span>Slot {i}</span>
+                                                        <span className="font-bold text-[10px]">{s.offset}</span>
+                                                    </div>
+                                                    
+                                                    {/* 连接线 */}
+                                                    <div className={`h-6 w-0.5 my-1 ${selectedSection === 'PAGE_DIRECTORY' ? 'bg-red-300' : 'bg-slate-300'}`}></div>
+                                                    
+                                                    {/* 指向的记录 */}
+                                                    <div className={`
+                                                        px-2 py-1 rounded text-[10px] font-bold border
+                                                        ${selectedSection === 'PAGE_DIRECTORY' ? 'bg-white border-red-300 text-red-600' : 'bg-slate-100 border-slate-200 text-slate-400'}
+                                                    `}>
+                                                        {s.target}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 italic">
+                                        * Slot 中存储的是 2 字节偏移量 (如 0x00F2)，直接指向该组最后一条记录的物理位置。
+                                    </p>
+                                </div>
+
+                                {/* D. 记录微观结构 (New Feature - Enhanced for NULL!) */}
+                                {selectedSection === 'USER_RECORDS' && (
+                                    <div className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-500">
+                                        <div className="text-[10px] text-slate-400 uppercase font-bold flex items-center gap-2">
+                                            4. COMPACT 记录解码实验室 (含 NULL 值)<CpuIcon className="w-3 h-3"/>
+                                        </div>
+                                        
+                                        <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+                                            
+                                            {/* 图例 (New Added Section) */}
+                                            <div className="flex flex-wrap gap-3 mb-3 px-1 border-b border-slate-100 pb-2">
+                                                <div className="flex items-center gap-1.5">
+                                                    <div className="w-3 h-3 rounded bg-purple-200 border border-purple-500"></div>
+                                                    <span className="text-[10px] text-slate-500 font-medium">变长字段长度</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <div className="w-3 h-3 rounded bg-yellow-200 border border-yellow-500"></div>
+                                                    <span className="text-[10px] text-slate-500 font-medium">NULL标志位</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <div className="w-3 h-3 rounded bg-blue-200 border border-blue-500"></div>
+                                                    <span className="text-[10px] text-slate-500 font-medium">记录头</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <div className="w-3 h-3 rounded bg-gray-200 border border-gray-400"></div>
+                                                    <span className="text-[10px] text-slate-500 font-medium">隐藏列</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <div className="w-3 h-3 rounded bg-green-200 border border-green-500"></div>
+                                                    <span className="text-[10px] text-slate-500 font-medium">真实数据</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-col gap-2 mb-4 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                                <div className="text-xs font-bold text-slate-500">示例数据 (含空值):</div>
+                                                <div className="flex flex-wrap gap-2 text-sm font-mono items-center">
+                                                    <div className={`px-2 py-1 rounded border ${hoveredHexPart === 'col1_data' ? 'bg-blue-100 border-blue-400 text-blue-800' : 'bg-white border-slate-300'}`}>
+                                                        col1: <span className="font-bold text-blue-600">"Zac"</span>
+                                                    </div>
+                                                    <div className={`px-2 py-1 rounded border border-dashed text-slate-400 ${hoveredHexPart === 'null_flag' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : 'bg-slate-100 border-slate-300'}`}>
+                                                        col2: <span className="font-bold italic">NULL</span>
+                                                    </div>
+                                                    <div className={`px-2 py-1 rounded border border-dashed text-slate-400 ${hoveredHexPart === 'null_flag' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : 'bg-slate-100 border-slate-300'}`}>
+                                                        col3: <span className="font-bold italic">NULL</span>
+                                                    </div>
+                                                    <div className={`px-2 py-1 rounded border ${hoveredHexPart === 'col4_data' ? 'bg-green-100 border-green-400 text-green-800' : 'bg-white border-slate-300'}`}>
+                                                        col4: <span className="font-bold text-green-600">"Beijing"</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="text-[10px] font-bold text-slate-400 mb-1">十六进制视图 (HEX DUMP):</div>
+                                            <div className="flex flex-wrap gap-1 font-mono text-sm select-none">
+                                                
+                                                {/* 变长列表 - Col4 (Beijing=7) */}
+                                                <div 
+                                                    onMouseEnter={() => setHoveredHexPart('col4_len')}
+                                                    onMouseLeave={() => setHoveredHexPart(null)}
+                                                    className={`
+                                                        relative px-2 py-2 rounded border border-dashed cursor-help transition-colors
+                                                        ${hoveredHexPart === 'col4_len' ? 'bg-purple-200 border-purple-500 text-purple-900 scale-105 z-10' : 'bg-purple-50 border-purple-200 text-purple-600'}
+                                                    `}
+                                                >
+                                                    07
+                                                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] px-2 py-1 rounded opacity-0 transition-opacity whitespace-nowrap pointer-events-none" style={{opacity: hoveredHexPart === 'col4_len' ? 1 : 0}}>
+                                                        Col4 Length (7)
+                                                    </div>
+                                                </div>
+
+                                                {/* 变长列表 - Col1 (Zac=3) */}
+                                                <div 
+                                                    onMouseEnter={() => setHoveredHexPart('col1_len')}
+                                                    onMouseLeave={() => setHoveredHexPart(null)}
+                                                    className={`
+                                                        relative px-2 py-2 rounded border border-dashed cursor-help transition-colors
+                                                        ${hoveredHexPart === 'col1_len' ? 'bg-purple-200 border-purple-500 text-purple-900 scale-105 z-10' : 'bg-purple-50 border-purple-200 text-purple-600'}
+                                                    `}
+                                                >
+                                                    03
+                                                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] px-2 py-1 rounded opacity-0 transition-opacity whitespace-nowrap pointer-events-none" style={{opacity: hoveredHexPart === 'col1_len' ? 1 : 0}}>
+                                                        Col1 Length (3)
+                                                    </div>
+                                                </div>
+
+                                                {/* NULL Flag - 06 (Binary 00000110) */}
+                                                <div 
+                                                    onMouseEnter={() => setHoveredHexPart('null_flag')}
+                                                    onMouseLeave={() => setHoveredHexPart(null)}
+                                                    className={`
+                                                        relative px-2 py-2 rounded border border-dashed cursor-help transition-colors
+                                                        ${hoveredHexPart === 'null_flag' ? 'bg-yellow-200 border-yellow-500 text-yellow-900 scale-105 z-10' : 'bg-yellow-50 border-yellow-200 text-yellow-600'}
+                                                    `}
+                                                >
+                                                    06
+                                                    <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] px-2 py-1 rounded opacity-0 transition-opacity whitespace-nowrap pointer-events-none text-center" style={{opacity: hoveredHexPart === 'null_flag' ? 1 : 0}}>
+                                                        NULL Flags: 00000110 <br/>
+                                                        (Col2=1, Col3=1)
+                                                    </div>
+                                                </div>
+
+                                                {/* Record Header */}
+                                                <div 
+                                                    onMouseEnter={() => setHoveredHexPart('rec_header')}
+                                                    onMouseLeave={() => setHoveredHexPart(null)}
+                                                    className={`
+                                                        relative px-3 py-2 rounded border border-dashed cursor-help transition-colors flex gap-1
+                                                        ${hoveredHexPart === 'rec_header' ? 'bg-blue-200 border-blue-500 text-blue-900 scale-105 z-10' : 'bg-blue-50 border-blue-200 text-blue-600'}
+                                                    `}
+                                                >
+                                                    <span>00</span><span>00</span><span>10</span><span>00</span><span>24</span>
+                                                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] px-2 py-1 rounded opacity-0 transition-opacity whitespace-nowrap pointer-events-none" style={{opacity: hoveredHexPart === 'rec_header' ? 1 : 0}}>
+                                                        Record Header (5 Bytes)
+                                                    </div>
+                                                </div>
+
+                                                {/* Hidden Cols */}
+                                                <div 
+                                                    onMouseEnter={() => setHoveredHexPart('hidden')}
+                                                    onMouseLeave={() => setHoveredHexPart(null)}
+                                                    className={`
+                                                        relative px-2 py-2 rounded border border-dashed cursor-help transition-colors text-slate-400
+                                                        ${hoveredHexPart === 'hidden' ? 'bg-gray-200 border-gray-400 text-gray-700 scale-105 z-10' : 'bg-gray-50 border-gray-200'}
+                                                    `}
+                                                >
+                                                    ...
+                                                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] px-2 py-1 rounded opacity-0 transition-opacity whitespace-nowrap pointer-events-none" style={{opacity: hoveredHexPart === 'hidden' ? 1 : 0}}>
+                                                        TrxID & RollPtr
+                                                    </div>
+                                                </div>
+
+                                                {/* Col 1: Zac (5A 61 63) */}
+                                                <div 
+                                                    onMouseEnter={() => setHoveredHexPart('col1_data')}
+                                                    onMouseLeave={() => setHoveredHexPart(null)}
+                                                    className={`
+                                                        relative px-2 py-2 rounded border border-dashed cursor-help transition-colors flex gap-1
+                                                        ${hoveredHexPart === 'col1_data' ? 'bg-blue-200 border-blue-500 text-blue-900 scale-105 z-10' : 'bg-green-50 border-green-200 text-green-700'}
+                                                    `}
+                                                >
+                                                    <span>5A</span><span>61</span><span>63</span>
+                                                    <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] px-2 py-1 rounded opacity-0 transition-opacity whitespace-nowrap pointer-events-none z-20" style={{opacity: hoveredHexPart === 'col1_data' ? 1 : 0}}>
+                                                        "Zac" (ASCII)
+                                                    </div>
+                                                </div>
+
+                                                {/* Col 4: Beijing (42 65 69 6A 69 6E 67) */}
+                                                <div 
+                                                    onMouseEnter={() => setHoveredHexPart('col4_data')}
+                                                    onMouseLeave={() => setHoveredHexPart(null)}
+                                                    className={`
+                                                        relative px-2 py-2 rounded border border-dashed cursor-help transition-colors flex gap-1
+                                                        ${hoveredHexPart === 'col4_data' ? 'bg-green-200 border-green-500 text-green-900 scale-105 z-10' : 'bg-green-50 border-green-200 text-green-700'}
+                                                    `}
+                                                >
+                                                    <span>42</span><span>65</span><span>69</span><span>6A</span><span>69</span><span>6E</span><span>67</span>
+                                                    <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] px-2 py-1 rounded opacity-0 transition-opacity whitespace-nowrap pointer-events-none z-20" style={{opacity: hoveredHexPart === 'col4_data' ? 1 : 0}}>
+                                                        "Beijing" (ASCII)
+                                                    </div>
+                                                </div>
+
+                                            </div>
+
+                                            <div className="mt-3 text-[10px] text-slate-500 leading-relaxed border-t border-slate-100 pt-2">
+                                                <span className="font-bold text-slate-600">NULL 值存储奥秘:</span>
+                                                <ul className="list-disc list-inside mt-1 space-y-1">
+                                                    <li><b>不占数据空间</b>: Col2 和 Col3 虽然是 NULL，但你可以看到在 Hex 视图的最后部分，没有它们的身影。只有 "Zac" 和 "Beijing" 紧挨着。</li>
+                                                    <li><b>不占长度空间</b>: 变长长度列表只存了 07 (Beijing) 和 03 (Zac)，跳过了 NULL 列。</li>
+                                                    <li><b>只占标志位</b>: 它们的“幽灵”存在于 NULL 标志位中 (Hex: 06 -> Binary: 00000110)。</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                            </div>
+                        </div>
+
+                        {/* 2. 详情与控制 */}
+                        <div className="flex-1 bg-white rounded-xl shadow-md border border-slate-200 p-6 flex flex-col">
+                            <div className="flex-1">
+                                <div className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold text-white mb-2 ${SECTION_INFO[selectedSection].color}`}>
+                                    DETAIL
+                                </div>
+                                <h2 className="text-xl font-bold text-slate-800 mb-2">
+                                    {SECTION_INFO[selectedSection].title}
+                                </h2>
+                                <p className="text-sm text-slate-600 leading-relaxed mb-4 border-b border-slate-100 pb-4">
+                                    {SECTION_INFO[selectedSection].desc}
+                                </p>
+                                
+                                <ul className="space-y-1.5 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                    {SECTION_INFO[selectedSection].details.map((item, idx) => (
+                                        <li key={idx} className="text-xs text-slate-600 flex items-start gap-2">
+                                            <span className="text-blue-500 mt-0.5">▸</span>
+                                            {item}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            <div className="mt-6 pt-4 border-t border-slate-100 flex gap-4">
+                                <button 
+                                    onClick={handleAddRecord}
+                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow transition-all flex items-center justify-center gap-2"
+                                >
+                                    <PlusIcon /> 插入记录
+                                </button>
+                                <button 
+                                    onClick={handleReset}
+                                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-sm font-bold transition-all flex items-center gap-2"
+                                >
+                                    <RefreshIcon /> 重置
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<PageStructureDemo />);
+    </script>
+</body>
+</html>

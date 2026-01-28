@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MySQL 16KB vs Linux 4KB 映射冲突演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #020617; color: #f8fafc; overflow-x: hidden; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        /* Buffer Pool 页面 */
+        .mysql-page {
+            width: 120px;
+            height: 120px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 2px;
+            padding: 4px;
+            border: 2px solid #334155;
+            background: #1e293b;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        .mysql-page:hover { border-color: #3b82f6; transform: translateY(-4px); }
+        .mysql-page.dirty { border-color: #f59e0b; box-shadow: 0 0 15px rgba(245, 158, 11, 0.3); }
+        .mysql-page.flushing { border-color: #3b82f6; animation: pulse-blue 1s infinite; }
+
+        @keyframes pulse-blue {
+            0%, 100% { box-shadow: 0 0 5px rgba(59, 130, 246, 0.5); }
+            50% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.8); }
+        }
+
+        .sub-page { width: 100%; height: 100%; background: #334155; border-radius: 2px; }
+        .dirty .sub-page { background: #d97706; }
+
+        /* 磁盘物理页 */
+        .disk-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 4px;
+        }
+        .os-page {
+            height: 30px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 2px;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .os-page.updated { background: #059669; border-color: #10b981; }
+        .os-page.corrupt { background: #7f1d1d; border-color: #ef4444; animation: shake 0.2s infinite; }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            50% { transform: translateX(1px); }
+        }
+
+        .particle {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            z-index: 100;
+            pointer-events: none;
+            transition: all 0.8s cubic-bezier(0.5, 0, 0.5, 1);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8 border-b border-slate-800 pb-6 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+                <h1 class="text-2xl font-black text-white italic">MySQL Architecture Simulation</h1>
+                <p class="text-slate-400 text-xs">演示：16KB 逻辑页跨越 4 个 4KB 物理页及其写失效冲突</p>
+            </div>
+            <div class="flex gap-2">
+                <button id="btn-checkpoint" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all active:scale-95 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    执行 Checkpoint (全部回写)
+                </button>
+                <button id="btn-crash" class="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all active:scale-95">模拟掉电 (Crash)</button>
+                <button id="btn-reset" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all">重置</button>
+            </div>
+        </header>
+
+        <!-- 内存区域 -->
+        <section class="mb-12">
+            <div class="flex justify-between items-end mb-4">
+                <h2 class="text-sm font-bold text-blue-400 uppercase tracking-widest">MySQL Buffer Pool (Memory)</h2>
+                <div class="text-[10px] text-slate-500">橙色表示脏页 (Dirty Pages)</div>
+            </div>
+            <div class="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6 relative" id="buffer-pool">
+                <!-- 页面由 JS 生成 -->
+            </div>
+        </section>
+
+        <!-- 传输路径 -->
+        <div class="h-20 flex items-center justify-center relative">
+            <div class="w-full h-[2px] bg-gradient-to-r from-transparent via-slate-800 to-transparent"></div>
+            <div class="absolute bg-slate-900 px-4 py-1 border border-slate-800 rounded-full text-[10px] font-bold text-slate-500">I/O SUBSYSTEM (BUS)</div>
+        </div>
+
+        <!-- 磁盘物理层 -->
+        <section>
+            <div class="flex justify-between items-end mb-4">
+                <h2 class="text-sm font-bold text-emerald-500 uppercase tracking-widest">Linux Disk Storage (Physical Layer)</h2>
+                <div class="text-[10px] text-slate-500">1个网格 = 4KB 物理扇区/页</div>
+            </div>
+            <div class="bg-slate-900/80 p-6 rounded-2xl border border-slate-800 min-h-[300px]">
+                <div id="disk-grid" class="disk-grid">
+                    <!-- 物理页由 JS 生成 -->
+                </div>
+            </div>
+        </section>
+
+        <!-- 状态与报告 -->
+        <div class="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
+                <h3 class="text-blue-400 font-bold mb-3 flex items-center gap-2 text-sm uppercase">
+                    <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                    实时冲突分析报告
+                </h3>
+                <div id="status-console" class="mono text-[11px] text-slate-400 space-y-2 h-32 overflow-y-auto pr-2">
+                    <div>> 系统初始化完成。</div>
+                    <div>> Buffer Pool 已预热，存在待刷新的脏页。</div>
+                </div>
+            </div>
+            <div class="bg-red-900/10 p-6 rounded-2xl border border-red-900/30 flex flex-col justify-center">
+                <div id="alert-box" class="hidden">
+                    <h3 class="text-red-500 font-bold text-xs mb-2 uppercase tracking-tighter">CRITICAL: Partial Write Failure</h3>
+                    <p class="text-[10px] text-red-200/70 leading-relaxed italic">
+                        "由于原子性冲突，16KB 的逻辑写入在 OS 层面被拆分。检测到 Checksum 不匹配，此页已损坏，无法通过 Redo Log 修复。"
+                    </p>
+                </div>
+                <div id="normal-box" class="text-slate-500 text-[11px] italic text-center">
+                    等待刷盘事件产生...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const PAGE_COUNT = 6;
+        const DISK_CELLS = 48;
+        let isCrashed = false;
+        let isProcessing = false;
+        let dirtyPages = new Set();
+
+        const bufferPool = document.getElementById('buffer-pool');
+        const diskGrid = document.getElementById('disk-grid');
+        const consoleEl = document.getElementById('status-console');
+        const alertBox = document.getElementById('alert-box');
+        const normalBox = document.getElementById('normal-box');
+        const cpBtn = document.getElementById('btn-checkpoint');
+
+        function init() {
+            bufferPool.innerHTML = '';
+            dirtyPages.clear();
+            for (let i = 0; i < PAGE_COUNT; i++) {
+                const page = document.createElement('div');
+                page.className = 'mysql-page dirty';
+                page.id = `logic-page-${i}`;
+                page.dataset.index = i;
+                page.innerHTML = `
+                    <div class="sub-page"></div><div class="sub-page"></div>
+                    <div class="sub-page"></div><div class="sub-page"></div>
+                    <div class="absolute -bottom-5 left-0 text-[8px] mono text-slate-500">PAGE: 0x${(100+i).toString(16)}</div>
+                `;
+                page.onclick = () => { if(!isProcessing) flushSinglePage(i); };
+                bufferPool.appendChild(page);
+                dirtyPages.add(i);
+            }
+
+            diskGrid.innerHTML = '';
+            for (let i = 0; i < DISK_CELLS; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'os-page';
+                cell.id = `phys-page-${i}`;
+                diskGrid.appendChild(cell);
+            }
+        }
+
+        async function flushSinglePage(index) {
+            if (isProcessing) return;
+            isProcessing = true;
+            cpBtn.disabled = true;
+            try {
+                await doFlush(index);
+            } catch (e) {
+                // 忽略预期的 Crash 错误，因为 handleCrash 已经处理了 UI
+                if (e !== "Crash") console.error(e);
+            }
+            if (!isCrashed) {
+                isProcessing = false;
+                cpBtn.disabled = false;
+            }
+        }
+
+        async function flushAll() {
+            if (isProcessing || dirtyPages.size === 0) return;
+            isProcessing = true;
+            cpBtn.disabled = true;
+            
+            log("触发全局 Checkpoint，开始顺序刷新所有脏页...", "text-yellow-500 font-bold");
+            
+            const pagesToFlush = Array.from(dirtyPages);
+            for (const index of pagesToFlush) {
+                try {
+                    await doFlush(index);
+                } catch (e) {
+                    if (e === "Crash") break; // 发生掉电，停止后续刷新
+                    console.error(e);
+                }
+            }
+            
+            if (!isCrashed || alertBox.classList.contains('hidden')) {
+                log("Checkpoint 完成，所有脏页已同步至物理层。", "text-emerald-500 font-bold");
+                isProcessing = false;
+                cpBtn.disabled = false;
+            }
+        }
+
+        async function doFlush(index) {
+            const logicPage = document.getElementById(`logic-page-${index}`);
+            if (!logicPage || !dirtyPages.has(index)) return;
+
+            logicPage.classList.remove('dirty');
+            logicPage.classList.add('flushing');
+            
+            const startPhys = index * 4;
+            log(`正在回写 Page 0x${(100+index).toString(16)} (16KB) -> 物理地址 [${startPhys}-${startPhys+3}]`, "text-blue-400");
+
+            for (let i = 0; i < 4; i++) {
+                // 如果启用了 Crash 模式，且写到一半（例如第2个物理页）
+                if (isCrashed && i === 2) {
+                    handleCrash(index, startPhys + i);
+                    return Promise.reject("Crash");
+                }
+
+                const targetPhysId = `phys-page-${startPhys + i}`;
+                const targetEl = document.getElementById(targetPhysId);
+                
+                spawnParticle(logicPage, targetEl);
+                await delay(400);
+                
+                if (targetEl) targetEl.classList.add('updated');
+            }
+
+            logicPage.classList.remove('flushing');
+            dirtyPages.delete(index);
+        }
+
+        function handleCrash(logicIndex, failedPhysIndex) {
+            log(`!!! 系统致命错误 !!! 在写入物理块 ${failedPhysIndex} 时发生断电崩溃。`, 'text-red-500 font-bold');
+            
+            const logicPage = document.getElementById(`logic-page-${logicIndex}`);
+            if (logicPage) {
+                logicPage.classList.remove('flushing');
+                logicPage.classList.add('border-red-600', 'bg-red-900/20');
+            }
+
+            for (let i = failedPhysIndex; i < (logicIndex * 4 + 4); i++) {
+                const el = document.getElementById(`phys-page-${i}`);
+                if (el) el.classList.add('corrupt');
+            }
+
+            normalBox.classList.add('hidden');
+            alertBox.classList.remove('hidden');
+            
+            isProcessing = true; // 锁定所有操作
+            cpBtn.disabled = true;
+        }
+
+        function spawnParticle(fromEl, toEl) {
+            const from = fromEl.getBoundingClientRect();
+            const to = toEl.getBoundingClientRect();
+            const p = document.createElement('div');
+            p.className = 'particle bg-blue-500 shadow-[0_0_10px_#3b82f6]';
+            p.style.left = `${from.left + from.width/2}px`;
+            p.style.top = `${from.top + from.height/2}px`;
+            document.body.appendChild(p);
+
+            setTimeout(() => {
+                p.style.left = `${to.left + to.width/2}px`;
+                p.style.top = `${to.top + to.height/2}px`;
+                p.style.transform = 'scale(0.5)';
+                p.style.opacity = '0';
+            }, 50);
+
+            setTimeout(() => p.remove(), 1000);
+        }
+
+        function log(msg, color = 'text-slate-400') {
+            const div = document.createElement('div');
+            div.className = color;
+            div.innerText = `> ${msg}`;
+            consoleEl.appendChild(div);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        // 事件绑定
+        window.onload = () => {
+            init();
+            
+            document.getElementById('btn-checkpoint').onclick = flushAll;
+            
+            document.getElementById('btn-crash').onclick = () => {
+                isCrashed = true;
+                document.getElementById('btn-crash').classList.add('ring-4', 'ring-red-500/50');
+                log("已预设断电风险。下次执行回写时将发生 Partial Write 错误。", "text-red-400");
+            };
+
+            document.getElementById('btn-reset').onclick = () => {
+                isCrashed = false;
+                isProcessing = false;
+                document.getElementById('btn-crash').classList.remove('ring-4', 'ring-red-500/50');
+                alertBox.classList.add('hidden');
+                normalBox.classList.remove('hidden');
+                cpBtn.disabled = false;
+                init();
+                log("系统已重置，等待新的事务产生脏页。");
+            };
+        };
+    </script>
+</body>
+</html>

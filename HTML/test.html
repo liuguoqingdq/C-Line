@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SecDash · 纯 HTML + 原生 JS</title>
+  <style>
+    /* ===================== 基础主题与排版 ===================== */
+    :root {
+      --bg: #f8fafc;           /* slate-50 */
+      --bg-2: #ffffff;         /* white */
+      --fg: #0f172a;           /* slate-900 */
+      --muted: #64748b;        /* slate-500 */
+      --border: #e2e8f0;       /* slate-200 */
+      --card: rgba(255,255,255,.85);
+      --shadow: 0 10px 30px rgba(2,6,23,.08);
+      --accent: #6366f1;       /* indigo-500 */
+      --accent-2: #0ea5e9;     /* sky-500 */
+      --success: #10b981;      /* emerald-500 */
+    }
+    .dark:root, html.dark {
+      --bg: #020617;           /* slate-950 */
+      --bg-2: #0b1220;         /* deep card */
+      --fg: #e5e7eb;           /* slate-200 */
+      --muted: #94a3b8;        /* slate-400 */
+      --border: #1f2937;       /* slate-800 */
+      --card: rgba(2,6,23,.6);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --accent: #8b8df8;       /* indigo glow */
+      --accent-2: #38bdf8;     /* sky-400 */
+      --success: #34d399;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK", Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      color: var(--fg);
+      background: linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+    }
+
+    .container { max-width: 1120px; margin: 0 auto; padding: 24px 16px; }
+
+    /* ===================== UI 原子样式 ===================== */
+    .row { display: grid; gap: 16px; }
+    @media (min-width: 1024px) { .row.lg-3 { grid-template-columns: 1fr 1fr 1fr; } }
+    @media (min-width: 1024px) { .row.lg-2 { grid-template-columns: 2fr 1fr; } }
+    @media (min-width: 768px)  { .row.md-2 { grid-template-columns: 1fr 1fr; } }
+
+    .card {
+      background: var(--card);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .title { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .desc { margin-top: 6px; font-size: 14px; color: var(--muted); }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--muted);
+      border: 1px solid var(--border); padding: 4px 8px; border-radius: 999px;
+    }
+
+    .btn { cursor: pointer; user-select: none; border-radius: 12px; padding: 8px 14px; font-size: 14px; border: 1px solid var(--border); background: transparent; color: var(--fg); }
+    .btn:hover { background: rgba(148,163,184,.12); }
+    .btn.primary { border-color: transparent; background: var(--fg); color: var(--bg-2); }
+    html.dark .btn.primary { background: #fff; color: #0b1220; }
+
+    .kpis { display: grid; gap: 12px; grid-template-columns: repeat(2,1fr); }
+    @media (min-width: 1024px) { .kpis { grid-template-columns: repeat(4,1fr);} }
+    .kpi { border: 1px solid var(--border); border-radius: 14px; padding: 14px; background: rgba(255,255,255,.5); }
+    html.dark .kpi { background: rgba(2,6,23,.35); }
+    .kpi-label { font-size: 12px; color: var(--muted); }
+    .kpi-value { font-size: 24px; font-weight: 700; margin-top: 6px; }
+
+    /* 顶部栏 */
+    .topbar { display:flex; align-items:center; justify-content: space-between; gap: 12px; }
+    .brand { display:flex; align-items:center; gap: 10px; }
+    .logo { width: 32px; height: 32px; border-radius: 12px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .brand h1 { margin: 0; font-size: 16px; font-weight: 700; }
+    .brand p { margin: 0; font-size: 12px; color: var(--muted); }
+    .badges { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+
+    /* 图表 */
+    .chart-wrap { height: 220px; }
+    svg { width: 100%; height: 100%; display:block; }
+    .legend { display:flex; gap:12px; align-items:center; font-size:12px; color: var(--muted); margin-top: 8px; }
+    .leg { display:flex; align-items:center; gap:6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display:inline-block; }
+
+    /* 终端 */
+    .terminal { background: rgba(0,0,0,.9); color:#86efac; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; border-radius: 14px; border: 1px solid var(--border); height: 260px; overflow: auto; padding: 12px; }
+    .muted { color: var(--muted); }
+
+    /* 网格卡片 */
+    .pill { font-size: 12px; padding: 4px 8px; border-radius: 8px; background: rgba(99,102,241,.12); color: var(--accent); display: inline-block; }
+    html.dark .pill { background: rgba(99,102,241,.18); color: #c7c8ff; }
+
+    footer { display:flex; align-items:center; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); padding-top: 18px; border-top: 1px solid var(--border); margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- 顶部栏 -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>SecDash</h1>
+          <p>纯 HTML + 原生 JS · 单页</p>
+        </div>
+      </div>
+      <div class="badges">
+        <span class="badge">无框架</span>
+        <span class="badge">自绘 SVG 图表</span>
+        <span class="badge">导出日志</span>
+        <button id="toggleTheme" class="btn" aria-label="切换主题">切换主题</button>
+      </div>
+    </div>
+
+    <!-- Hero 区：简介 + 操作 + KPI -->
+    <div class="row lg-2" style="margin-top: 18px;">
+      <div class="card">
+        <h2 class="title">一站式 <span style="background: linear-gradient(90deg,var(--accent),var(--accent-2)); -webkit-background-clip:text; background-clip:text; color: transparent;">安全工程</span> 演示页</h2>
+        <p class="desc">包含图表、统计卡片、终端日志模拟与导出。可作为作品集或 Demo 骨架，将示例内容替换为你的接口即可。</p>
+        <div style="margin-top: 12px; display:flex; flex-wrap:wrap; gap:10px;">
+          <button id="btnData" class="btn primary">生成演示数据</button>
+          <button id="btnRun" class="btn">开始模拟</button>
+          <button id="btnExport" class="btn">导出日志</button>
+        </div>
+        <div class="kpis" style="margin-top:14px;">
+          <div class="kpi">
+            <div class="kpi-label">今日告警</div>
+            <div id="kpiToday" class="kpi-value">-</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">扫描任务</div>
+            <div id="kpiScanSum" class="kpi-value">-</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">近 7 日告警</div>
+            <div id="kpiAlertSum" class="kpi-value">-</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">告警/扫描比</div>
+            <div id="kpiRatio" class="kpi-value">-</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="title">近 7 日事件走势</div>
+        <div class="desc">紫色：告警 · 灰色：扫描任务</div>
+        <div class="chart-wrap">
+          <svg id="chart" viewBox="0 0 640 220" preserveAspectRatio="none" role="img" aria-label="近 7 日事件走势"></svg>
+        </div>
+        <div class="legend">
+          <span class="leg"><span class="dot" style="background: var(--accent);"></span>告警</span>
+          <span class="leg"><span class="dot" style="background: #94a3b8;"></span>扫描</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 功能板块 -->
+    <div class="row md-2 lg-3" style="margin-top: 18px; grid-template-columns: repeat(4,1fr);">
+      <div class="card">
+        <div class="title">资产探测</div>
+        <p class="desc">子网扫描、服务指纹、端口速览。提示：点击上方“开始模拟”观察新增日志。</p>
+      </div>
+      <div class="card">
+        <div class="title">漏洞扫描</div>
+        <p class="desc">CVE 速配、POC 聚合。可将 POC 结果以 JSON 映射到图表。</p>
+      </div>
+      <div class="card">
+        <div class="title">日志分析 + RAG</div>
+        <p class="desc">将原始日志切片入库，结合知识库问答。</p>
+      </div>
+      <div class="card">
+        <div class="title">自动化 Agent</div>
+        <p class="desc">从“提问 → 搜索 → 执行 → 汇报”一条龙。</p>
+      </div>
+    </div>
+
+    <!-- 示例项目 -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="title">示例项目</div>
+      <p class="desc">以下为占位条目，你可以替换为自己的仓库链接或文档。</p>
+      <div class="row md-2 lg-3" style="margin-top: 12px; grid-template-columns: repeat(3,1fr);">
+        <div class="card">
+          <div style="display:flex; justify-content: space-between; align-items:center;">
+            <div style="font-weight:700;">MQTT PWN Challenge</div>
+            <a href="#" style="font-size: 14px; color: var(--accent); text-decoration: underline;">查看</a>
+          </div>
+          <p class="desc">基于消息注入与命令拼接的教学靶场。</p>
+          <div style="display:flex; gap:8px; margin-top: 8px; flex-wrap: wrap;">
+            <span class="pill">MQTT</span><span class="pill">命令注入</span><span class="pill">Docker</span>
+          </div>
+        </div>
+        <div class="card">
+          <div style="display:flex; justify-content: space-between; align-items:center;">
+            <div style="font-weight:700;">固件分析流水线</div>
+            <a href="#" style="font-size: 14px; color: var(--accent); text-decoration: underline;">查看</a>
+          </div>
+          <p class="desc">Binwalk/QEMU/IDA + RAG 知识助手。</p>
+          <div style="display:flex; gap:8px; margin-top: 8px; flex-wrap: wrap;">
+            <span class="pill">固件提取</span><span class="pill">QEMU</span><span class="pill">RAG</span>
+          </div>
+        </div>
+        <div class="card">
+          <div style="display:flex; justify-content: space-between; align-items:center;">
+            <div style="font-weight:700;">FlowDroid 隐私检测</div>
+            <a href="#" style="font-size: 14px; color: var(--accent); text-decoration: underline;">查看</a>
+          </div>
+          <p class="desc">Android 静态分析与污点路径识别。</p>
+          <div style="display:flex; gap:8px; margin-top: 8px; flex-wrap: wrap;">
+            <span class="pill">FlowDroid</span><span class="pill">Taint</span><span class="pill">Gradle</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 终端日志 & 说明 -->
+    <div class="row lg-2" style="margin-top: 18px;">
+      <div class="card">
+        <div class="title">实时日志（模拟）</div>
+        <p class="desc">点击上方按钮可以开始/暂停模拟，支持导出为 .txt</p>
+        <div id="terminal" class="terminal" aria-live="polite" aria-atomic="false">
+          <div class="muted">( 暂无日志，点击“开始模拟”以生成 )</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="title">联系 & 说明</div>
+        <ul class="desc" style="margin-top:8px; list-style: none; padding-left: 0; display: grid; gap: 10px;">
+          <li><strong>如何二次定制？</strong><br>替换“示例项目”、对接真实接口，或将日志连接到你的 WebSocket。</li>
+          <li><strong>接入 RAG/Agent</strong><br>把知识库与日志切片入库 → 语义检索 → 智能问答与自动化流程。</li>
+          <li><strong>风格与设计</strong><br>极简、圆角、柔和阴影、玻璃拟态背景，默认深色模式。</li>
+        </ul>
+      </div>
+    </div>
+
+    <footer>
+      <div>© <span id="year"></span> SecDash — 纯 HTML + 原生 JS 单页</div>
+      <div style="display:flex; gap: 12px;"><a href="#" class="muted">隐私声明</a><a href="#" class="muted">使用条款</a></div>
+    </footer>
+  </div>
+
+  <script>
+    // ===================== 数据与状态 =====================
+    const state = {
+      series: [],
+      logs: [],
+      timer: null,
+      running: false,
+    };
+
+    function genSeries(days = 8) {
+      const today = new Date();
+      const arr = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(today);
+        d.setDate(today.getDate() - i);
+        arr.push({
+          date: `${d.getMonth()+1}/${d.getDate()}`,
+          alerts: Math.floor(20 + Math.random()*120),
+          scans: Math.floor(5 + Math.random()*40),
+        });
+      }
+      return arr;
+    }
+
+    // ===================== KPI 更新 =====================
+    function updateKpis() {
+      if (!state.series.length) return;
+      const sumAlerts = state.series.reduce((a,b)=>a+b.alerts,0);
+      const sumScans  = state.series.reduce((a,b)=>a+b.scans,0);
+      const today = state.series[state.series.length-1];
+      const ratio = (today.alerts / Math.max(1, today.scans)).toFixed(1) + 'x';
+      document.getElementById('kpiToday').textContent = today.alerts;
+      document.getElementById('kpiScanSum').textContent = sumScans;
+      document.getElementById('kpiAlertSum').textContent = sumAlerts;
+      document.getElementById('kpiRatio').textContent = ratio;
+    }
+
+    // ===================== 自绘 SVG 图表 =====================
+    function renderChart() {
+      const svg = document.getElementById('chart');
+      const W = 640, H = 220, P = {l: 28, r: 10, t: 14, b: 24};
+      svg.innerHTML = '';
+      const g = create('g', { transform: `translate(${P.l},${P.t})`});
+      svg.appendChild(g);
+      const w = W - P.l - P.r;
+      const h = H - P.t - P.b;
+      const data = state.series;
+      if (!data.length) return;
+
+      const maxY = Math.max(...data.map(d=>Math.max(d.alerts, d.scans)));
+      const yMax = Math.ceil(maxY/20)*20 + 10;
+      const x = (i)=> i*(w/(data.length-1));
+      const y = (v)=> h - (v/yMax)*h;
+
+      // 网格
+      for (let i=0;i<=4;i++) {
+        const yy = Math.round(i*(h/4));
+        g.appendChild(create('line',{x1:0,y1:yy,x2:w,y2:yy,stroke:'rgba(148,163,184,.25)', 'stroke-width':1}));
+      }
+
+      // 轴标签（X）
+      data.forEach((d,i)=>{
+        const tx = x(i), ty = h+16;
+        const t = create('text',{x:tx,y:ty, 'text-anchor':'middle', 'font-size':12, fill:'var(--muted)'});
+        t.textContent = d.date; g.appendChild(t);
+      });
+
+      // 折线与面积路径构造
+      function pathFor(key){
+        const top = data.map((d,i)=> `${i===0?'M':'L'} ${x(i)} ${y(d[key])}`).join(' ');
+        const bottom = `L ${x(data.length-1)} ${h} L 0 ${h} Z`;
+        return top + ' ' + bottom;
+      }
+      function lineFor(key){ return data.map((d,i)=> `${i===0?'M':'L'} ${x(i)} ${y(d[key])}`).join(' '); }
+
+      // 扫描面积（灰）
+      g.appendChild(create('path', { d: pathFor('scans'), fill: 'rgba(148,163,184,.22)'}));
+      g.appendChild(create('path', { d: lineFor('scans'), fill: 'none', stroke: '#94a3b8', 'stroke-width': 2 }));
+
+      // 告警面积（紫）
+      g.appendChild(create('path', { d: pathFor('alerts'), fill: 'rgba(99,102,241,.25)'}));
+      g.appendChild(create('path', { d: lineFor('alerts'), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }));
+    }
+
+    function create(tag, attrs={}) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const k in attrs) el.setAttribute(k, attrs[k]);
+      return el;
+    }
+
+    // ===================== 日志模拟 =====================
+    function startLogs(){
+      if (state.timer) return;
+      state.timer = setInterval(()=>{
+        const now = new Date();
+        const ts = now.toLocaleTimeString();
+        const samples = [
+          "SCAN start: /assets/subnet 192.168.1.0/24",
+          "FETCH firmware: device=router-k2 status=OK",
+          "MQTT recv: topic=/cmd payload='reboot'",
+          "SYMBOLIC exec: angr path#" + Math.floor(Math.random()*128),
+          "FLOWDROID: sink found -> TelephonyManager#getDeviceId",
+          "RAG query: \"如何修复ret2dlresolve\" candidate=23",
+          "AGENT plan: [discover]->[analyze]->[patch]",
+          "ALERT: possible command-injection in /cgi-bin/ping",
+        ];
+        const line = `${ts}  -  ${samples[Math.floor(Math.random()*samples.length)]}`;
+        state.logs.unshift(line);
+        if (state.logs.length>200) state.logs.pop();
+        renderLogs();
+      }, 900);
+    }
+    function stopLogs(){ clearInterval(state.timer); state.timer = null; }
+
+    function renderLogs(){
+      const box = document.getElementById('terminal');
+      box.innerHTML = '';
+      if (!state.logs.length) {
+        const div = document.createElement('div');
+        div.className = 'muted';
+        div.textContent = '( 暂无日志，点击“开始模拟”以生成 )';
+        box.appendChild(div); return;
+      }
+      const frag = document.createDocumentFragment();
+      state.logs.forEach(l=>{
+        const line = document.createElement('div');
+        line.textContent = l; frag.appendChild(line);
+      });
+      box.appendChild(frag);
+    }
+
+    // ===================== 交互 =====================
+    function refreshData(){ state.series = genSeries(8); updateKpis(); renderChart(); }
+
+    function toggleRun(){
+      state.running = !state.running;
+      const btn = document.getElementById('btnRun');
+      btn.textContent = state.running ? '暂停模拟' : '开始模拟';
+      state.running ? startLogs() : stopLogs();
+    }
+
+    function exportLogs(){
+      const blob = new Blob([state.logs.slice().reverse().join('\n')], {type: 'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `SecDash-logs-${Date.now()}.txt`; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ===================== 主题 =====================
+    function applyTheme(t){ document.documentElement.classList.toggle('dark', t==='dark'); localStorage.setItem('secdash-theme', t); }
+    function toggleTheme(){ const dark = document.documentElement.classList.contains('dark'); applyTheme(dark? 'light':'dark'); }
+
+    // ===================== 初始化 =====================
+    window.addEventListener('DOMContentLoaded', ()=>{
+      // 主题
+      const saved = localStorage.getItem('secdash-theme');
+      if (saved) applyTheme(saved);
+
+      document.getElementById('btnData').addEventListener('click', refreshData);
+      document.getElementById('btnRun').addEventListener('click', toggleRun);
+      document.getElementById('btnExport').addEventListener('click', exportLogs);
+      document.getElementById('toggleTheme').addEventListener('click', toggleTheme);
+
+      document.getElementById('year').textContent = new Date().getFullYear();
+
+      // 初始绘制
+      refreshData();
+    });
+
+    // 响应式：在窗口变化时重绘图表
+    let resizeTimer=null; window.addEventListener('resize', ()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(renderChart, 120); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ STL Deque 内存布局与迭代原理可视化</title>
+    <style>
+        :root {
+            --primary-color: #3b82f6;
+            --secondary-color: #10b981;
+            --accent-color: #ef4444;
+            --bg-color: #f8fafc;
+            --text-color: #1e293b;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            color: var(--text-color);
+            margin-bottom: 10px;
+        }
+
+        p.subtitle {
+            color: #64748b;
+            margin-bottom: 30px;
+            text-align: center;
+            max-width: 800px;
+        }
+
+        /* 控制面板 */
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        button.push-front { background-color: var(--primary-color); color: white; }
+        button.push-back { background-color: var(--secondary-color); color: white; }
+        button.pop-front { background-color: #94a3b8; color: white; }
+        button.pop-back { background-color: #94a3b8; color: white; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0,0,0,0.15); }
+        button:active { transform: translateY(0); }
+
+        /* 主视口 */
+        .viewport {
+            width: 100%;
+            max-width: 1000px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            overflow-x: auto;
+        }
+
+        /* Map (中控器) 区域 */
+        .map-section {
+            margin-bottom: 40px;
+            position: relative;
+        }
+
+        .section-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section-info {
+            font-size: 0.9rem;
+            color: #64748b;
+            font-weight: normal;
+        }
+
+        .map-container {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            padding: 20px 0;
+            background: #f1f5f9;
+            border-radius: 8px;
+            border: 2px dashed #cbd5e1;
+        }
+
+        .map-node {
+            width: 60px;
+            height: 60px;
+            background-color: #e2e8f0;
+            border: 2px solid #cbd5e1;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            color: #64748b;
+            position: relative;
+            transition: all 0.3s;
+        }
+
+        .map-node.active {
+            background-color: #dbeafe;
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+            font-weight: bold;
+        }
+
+        /* 连接线 */
+        .pointer-line {
+            position: absolute;
+            width: 2px;
+            background-color: var(--primary-color);
+            bottom: -20px;
+            left: 50%;
+            height: 20px;
+            transform: translateX(-50%);
+            display: none;
+        }
+        
+        .map-node.active .pointer-line {
+            display: block;
+        }
+
+        /* Buffers (缓冲区) 区域 */
+        .buffer-container {
+            display: flex;
+            justify-content: center;
+            gap: 20px; /* buffer 之间的间距 */
+            margin-top: 10px;
+            min-height: 120px;
+        }
+
+        .buffer-block {
+            border: 2px solid var(--primary-color);
+            background-color: #eff6ff;
+            border-radius: 8px;
+            padding: 5px;
+            display: flex;
+            flex-direction: column;
+            width: 60px; /* 与 map node 对齐 */
+            position: relative;
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .buffer-label {
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--primary-color);
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        .element-slot {
+            height: 30px;
+            border: 1px solid #bfdbfe;
+            background: white;
+            margin-bottom: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .element-slot.filled {
+            background-color: var(--secondary-color);
+            color: white;
+            border-color: var(--secondary-color);
+        }
+
+        .element-slot.empty {
+            background-color: #f8fafc;
+            color: #cbd5e1;
+        }
+
+        /* 迭代器解释区域 */
+        .iterator-viz {
+            margin-top: 40px;
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.9rem;
+            margin-top: 10px;
+            overflow-x: auto;
+        }
+
+        .highlight { color: var(--secondary-color); }
+        .comment { color: #94a3b8; }
+
+        /* 提示框 */
+        .tooltip {
+            position: absolute;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+    </style>
+</head>
+<body>
+
+    <h1>C++ STL Deque (双端队列) 原理可视化</h1>
+    <p class="subtitle">
+        Deque (Double-ended queue) 在内存中是<b>分段连续</b>的。它维护一个中控器 (Map)，指向多个固定大小的缓冲区 (Buffer)。
+        <br>这种结构使得它在两端插入/删除都是 O(1)，同时也支持 O(1) 的随机访问。
+    </p>
+
+    <div class="controls">
+        <button class="push-front" onclick="deque.pushFront()">Push Front (头部插入)</button>
+        <button class="push-back" onclick="deque.pushBack()">Push Back (尾部插入)</button>
+        <button class="pop-front" onclick="deque.popFront()">Pop Front (头部删除)</button>
+        <button class="pop-back" onclick="deque.popBack()">Pop Back (尾部删除)</button>
+        <button onclick="deque.reset()">重置 (Reset)</button>
+    </div>
+
+    <div class="viewport">
+        <!-- Map Section -->
+        <div class="map-section">
+            <div class="section-title">
+                1. 中控器 (Map)
+                <span class="section-info">T** map (指针数组，每个元素指向一个缓冲区)</span>
+            </div>
+            <div class="map-container" id="mapContainer">
+                <!-- Map Nodes generated by JS -->
+            </div>
+        </div>
+
+        <!-- Buffer Section -->
+        <div class="buffer-section">
+            <div class="section-title">
+                2. 缓冲区 (Buffers)
+                <span class="section-info">固定大小 (本例设为 5)，用于存放实际数据</span>
+            </div>
+            <div class="buffer-container" id="bufferContainer">
+                <!-- Buffers generated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <div class="viewport" style="margin-top: 20px;">
+        <div class="section-title">3. 迭代器 (Iterator) 结构</div>
+        <p style="font-size: 0.9rem; line-height: 1.6;">
+            Deque 的迭代器不仅仅是一个指针，它是一个包含 4 个指针的结构体。这使得它可以在“断开”的内存块之间无缝跳转。
+        </p>
+        <div class="iterator-viz">
+            <div style="display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 300px;">
+                    <strong>当前 begin() 迭代器状态:</strong>
+                    <ul id="iterInfo" style="font-size: 0.9rem; color: #475569;">
+                        <li>等待操作...</li>
+                    </ul>
+                </div>
+                <div style="flex: 1; min-width: 300px;">
+                    <strong>C++ 源码模拟:</strong>
+                    <div class="code-block">
+struct __deque_iterator {
+    T* <span class="highlight">cur</span>;    <span class="comment">// 指向当前缓冲区的当前元素</span>
+    T* <span class="highlight">first</span>;  <span class="comment">// 指向当前缓冲区的头部</span>
+    T* <span class="highlight">last</span>;   <span class="comment">// 指向当前缓冲区的尾部 (边界)</span>
+    T** <span class="highlight">node</span>;  <span class="comment">// 指向中控器(Map)中的位置</span>
+    
+    <span class="comment">// 当 cur == last 时，跳到下一个 node 指向的缓冲区</span>
+};
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 配置
+        const BUFFER_SIZE = 5; // 每个缓冲区的大小
+        const INITIAL_MAP_SIZE = 9; // Map 的视觉大小（奇数以保持居中）
+
+        class DequeVisualizer {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                this.counter = 1;
+                // mapData 存储 buffer 对象，如果为 null 表示该位置未分配 buffer
+                this.mapData = new Array(INITIAL_MAP_SIZE).fill(null);
+                
+                // 初始化：在中间分配一个 buffer
+                const centerIndex = Math.floor(INITIAL_MAP_SIZE / 2);
+                this.mapData[centerIndex] = this.createBuffer();
+                
+                // 逻辑上的 front 和 back 指针
+                // 格式：{ mapIndex, bufferIndex }
+                // 初始时，front 和 back 都指向中间 buffer 的中间位置
+                const centerBufferMid = Math.floor(BUFFER_SIZE / 2);
+                
+                // 模拟 std::deque 的行为，初始为空时，start 和 finish 可能会有些特殊的偏移逻辑
+                // 这里为了可视化方便：
+                // 第一次 push 会放入 centerBufferMid 位置。
+                this.start = { mapIndex: centerIndex, bufferIndex: centerBufferMid };
+                this.finish = { mapIndex: centerIndex, bufferIndex: centerBufferMid };
+                this.isEmpty = true;
+
+                this.render();
+            }
+
+            createBuffer() {
+                // Buffer 是一个固定大小的数组，初始为 null
+                return new Array(BUFFER_SIZE).fill(null);
+            }
+
+            pushBack() {
+                if (this.isEmpty) {
+                    this.mapData[this.start.mapIndex][this.start.bufferIndex] = this.counter++;
+                    // finish 指向下一个可用位置（STL定义：前闭后开区间 [start, finish)）
+                    // 所以当前元素在 start，finish 需要后移
+                    this.moveFinishIterator(1); 
+                    this.isEmpty = false;
+                } else {
+                    // 检查 finish 是否在当前 buffer 范围内
+                    // STL deque finish 指向的是“尾元素的下一个位置”
+                    
+                    // 如果 finish 已经超出了当前 buffer (即 bufferIndex == BUFFER_SIZE)
+                    // 或者当前位置已经没空间了 (逻辑上的检查)
+                    
+                    let currentBuf = this.mapData[this.finish.mapIndex];
+                    
+                    // 检查是否需要新 buffer
+                    if (this.finish.bufferIndex === BUFFER_SIZE) {
+                        // 需要跳转到下一个 map node
+                        const nextMapIndex = this.finish.mapIndex + 1;
+                        
+                        if (nextMapIndex >= this.mapData.length) {
+                            alert("演示 Map 已满，重置中...");
+                            this.reset();
+                            return;
+                        }
+
+                        // 如果下一个位置没有 buffer，分配它
+                        if (!this.mapData[nextMapIndex]) {
+                            this.mapData[nextMapIndex] = this.createBuffer();
+                        }
+
+                        // 更新 finish 指向新 buffer 的开头
+                        this.finish.mapIndex = nextMapIndex;
+                        this.finish.bufferIndex = 0;
+                    }
+
+                    // 填入数据
+                    this.mapData[this.finish.mapIndex][this.finish.bufferIndex] = this.counter++;
+                    // finish 后移
+                    this.moveFinishIterator(1);
+                }
+                this.render();
+            }
+
+            pushFront() {
+                if (this.isEmpty) {
+                    this.mapData[this.start.mapIndex][this.start.bufferIndex] = this.counter++;
+                    // finish 后移一位，因为 range 是 [start, finish)
+                    this.moveFinishIterator(1);
+                    this.isEmpty = false;
+                } else {
+                    // start 前移
+                    this.moveStartIterator(-1);
+                    
+                    // 如果 start 前移后 bufferIndex 变为 -1，说明需要去前一个 map node
+                    if (this.start.bufferIndex < 0) {
+                        const prevMapIndex = this.start.mapIndex - 1;
+                        
+                        if (prevMapIndex < 0) {
+                            alert("演示 Map 头部已满，实际 C++ 会重新分配 Map，这里重置演示...");
+                            this.reset();
+                            return;
+                        }
+
+                        if (!this.mapData[prevMapIndex]) {
+                            this.mapData[prevMapIndex] = this.createBuffer();
+                        }
+
+                        this.start.mapIndex = prevMapIndex;
+                        this.start.bufferIndex = BUFFER_SIZE - 1;
+                    }
+
+                    // 填入数据
+                    this.mapData[this.start.mapIndex][this.start.bufferIndex] = this.counter++;
+                }
+                this.render();
+            }
+
+            popBack() {
+                if (this.isEmpty) return;
+
+                // finish 前移一位，指向最后一个有效元素
+                this.moveFinishIterator(-1);
+                
+                // 如果 finish bufferIndex < 0，回退到上一个 map node
+                if (this.finish.bufferIndex < 0) {
+                    this.finish.mapIndex--;
+                    this.finish.bufferIndex = BUFFER_SIZE - 1;
+                    
+                    // 实际 STL 可能会保留 buffer 缓存，或者释放
+                    // 这里为了演示，我们如果不需这个 buffer 了，可以为了视觉效果置空，但 STL 通常保留以备后用
+                }
+
+                // 清除数据
+                this.mapData[this.finish.mapIndex][this.finish.bufferIndex] = null;
+
+                // 检查是否变空
+                if (this.start.mapIndex === this.finish.mapIndex && 
+                    this.start.bufferIndex === this.finish.bufferIndex) {
+                    this.isEmpty = true;
+                    // 重置指针到中心，为了美观
+                    const centerIndex = Math.floor(INITIAL_MAP_SIZE / 2);
+                    const centerBufferMid = Math.floor(BUFFER_SIZE / 2);
+                    // 如果中间 buffer 不存在（被删了？虽然我们上面没删），重建
+                    if(!this.mapData[centerIndex]) this.mapData[centerIndex] = this.createBuffer();
+                    
+                    this.start = { mapIndex: centerIndex, bufferIndex: centerBufferMid };
+                    this.finish = { mapIndex: centerIndex, bufferIndex: centerBufferMid };
+                }
+
+                this.render();
+            }
+
+            popFront() {
+                if (this.isEmpty) return;
+
+                // 清除当前 start 的数据
+                this.mapData[this.start.mapIndex][this.start.bufferIndex] = null;
+
+                // start 后移
+                this.moveStartIterator(1);
+
+                // 如果 start 超出当前 buffer
+                if (this.start.bufferIndex === BUFFER_SIZE) {
+                    this.start.mapIndex++;
+                    this.start.bufferIndex = 0;
+                }
+
+                // 检查是否变空
+                 if (this.start.mapIndex > this.finish.mapIndex || 
+                    (this.start.mapIndex === this.finish.mapIndex && this.start.bufferIndex === this.finish.bufferIndex)) {
+                    this.isEmpty = true;
+                    const centerIndex = Math.floor(INITIAL_MAP_SIZE / 2);
+                    const centerBufferMid = Math.floor(BUFFER_SIZE / 2);
+                    if(!this.mapData[centerIndex]) this.mapData[centerIndex] = this.createBuffer();
+                    this.start = { mapIndex: centerIndex, bufferIndex: centerBufferMid };
+                    this.finish = { mapIndex: centerIndex, bufferIndex: centerBufferMid };
+                }
+
+                this.render();
+            }
+
+            // 辅助：移动逻辑指针（仅用于简单计算，不处理跨 buffer）
+            moveFinishIterator(step) {
+                this.finish.bufferIndex += step;
+            }
+            moveStartIterator(step) {
+                this.start.bufferIndex += step;
+            }
+
+            render() {
+                const mapContainer = document.getElementById('mapContainer');
+                const bufferContainer = document.getElementById('bufferContainer');
+                const iterInfo = document.getElementById('iterInfo');
+
+                mapContainer.innerHTML = '';
+                bufferContainer.innerHTML = '';
+
+                // 渲染 Map Nodes
+                this.mapData.forEach((buffer, index) => {
+                    const node = document.createElement('div');
+                    node.className = 'map-node';
+                    node.innerText = buffer ? `Buf ${index}` : 'null';
+                    
+                    // 标记激活的 Map Node
+                    if (buffer) {
+                        node.classList.add('active');
+                        // 连线视觉效果
+                        const line = document.createElement('div');
+                        line.className = 'pointer-line';
+                        node.appendChild(line);
+                    }
+                    
+                    mapContainer.appendChild(node);
+
+                    // 渲染 Buffers (只渲染存在的)
+                    if (buffer) {
+                        // 为了保持 buffer 和 map 对齐，我们需要用空的占位符填充 bufferContainer
+                        // 或者使用 grid/flex 布局技巧。这里简单处理：
+                        // 如果 Map 是 null，bufferContainer 放一个透明的占位
+                    }
+                });
+
+                // 重新渲染 Buffer 区域，为了对齐，我们遍历 mapData
+                this.mapData.forEach((buffer, mapIndex) => {
+                    const bufferWrapper = document.createElement('div');
+                    bufferWrapper.style.display = 'flex';
+                    bufferWrapper.style.flexDirection = 'column';
+                    bufferWrapper.style.alignItems = 'center';
+                    
+                    if (buffer) {
+                        const block = document.createElement('div');
+                        block.className = 'buffer-block';
+                        
+                        const label = document.createElement('div');
+                        label.className = 'buffer-label';
+                        label.innerText = `Buf ${mapIndex}`;
+                        block.appendChild(label);
+
+                        buffer.forEach((val, bufIndex) => {
+                            const slot = document.createElement('div');
+                            slot.className = 'element-slot ' + (val !== null ? 'filled' : 'empty');
+                            slot.innerText = val !== null ? val : '';
+                            
+                            // 标记 begin() 和 end() - 实际上 end() 指向最后一个元素的后面
+                            // 这里简单高亮有效元素
+                            
+                            block.appendChild(slot);
+                        });
+                        bufferWrapper.appendChild(block);
+                    } else {
+                        // 占位
+                        bufferWrapper.style.width = '60px'; 
+                    }
+                    bufferContainer.appendChild(bufferWrapper);
+                });
+
+                // 更新迭代器信息
+                if (this.isEmpty) {
+                    iterInfo.innerHTML = `<li>容器为空</li>`;
+                } else {
+                    iterInfo.innerHTML = `
+                        <li><span class="highlight">cur</span> (当前元素): 指向 Map[${this.start.mapIndex}] 的 Buffer[${this.start.bufferIndex}]</li>
+                        <li><span class="highlight">first</span> (当前块头): Buffer[0]</li>
+                        <li><span class="highlight">last</span> (当前块尾): Buffer[${BUFFER_SIZE}]</li>
+                        <li><span class="highlight">node</span> (中控指针): Map[${this.start.mapIndex}]</li>
+                        <li style="margin-top:5px; color:#10b981;">逻辑地址: start(${this.start.mapIndex}, ${this.start.bufferIndex}) -> finish(${this.finish.mapIndex}, ${this.finish.bufferIndex})</li>
+                    `;
+                }
+            }
+        }
+
+        const deque = new DequeVisualizer();
+    </script>
+</body>
+</html>

@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InnoDB Double Write 机制演示 - 深度解析</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .page-node { transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+        .anim-bounce { animation: bounce 1s infinite; }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(-5px); }
+            50% { transform: translateY(5px); }
+        }
+        .shake { animation: shake 0.5s ease-in-out; }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        .disk-area { background-image: radial-gradient(#e2e8f0 1px, transparent 1px); background-size: 20px 20px; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans">
+
+<div class="min-h-screen p-4 md:p-8 max-w-7xl mx-auto">
+    <!-- Header -->
+    <header class="mb-8 text-center">
+        <h1 class="text-3xl font-bold text-slate-900 flex items-center justify-center gap-2">
+            <i data-lucide="shield-check" class="text-blue-600 w-8 h-8"></i>
+            InnoDB Double Write 机制与 WAL 流程
+        </h1>
+        <p class="mt-2 text-slate-600 max-w-2xl mx-auto italic">
+            "Redo Log (WAL) 确保持久性，Double Write 确保原子性。"
+        </p>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        <!-- Controls (Left 4 columns) -->
+        <div class="lg:col-span-4 space-y-6">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <i data-lucide="settings" class="text-slate-500 w-5 h-5"></i> 崩溃场景模拟
+                </h2>
+                
+                <div class="space-y-3">
+                    <label class="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:border-blue-300 transition-colors">
+                        <input type="radio" name="scenario" value="normal" checked class="w-4 h-4 text-blue-600">
+                        <div class="text-sm">
+                            <div class="font-bold">正常流程</div>
+                            <div class="text-xs text-slate-500">WAL -> DWB -> ibd 顺序完成</div>
+                        </div>
+                    </label>
+                    <label class="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:border-red-300 transition-colors">
+                        <input type="radio" name="scenario" value="s1" class="w-4 h-4 text-red-600">
+                        <div class="text-sm">
+                            <div class="font-bold">情况一：DWB 写入前崩溃</div>
+                            <div class="text-xs text-slate-500">脏页未动，Redo 已写磁盘</div>
+                        </div>
+                    </label>
+                    <label class="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:border-red-300 transition-colors">
+                        <input type="radio" name="scenario" value="s2" class="w-4 h-4 text-red-600">
+                        <div class="text-sm">
+                            <div class="font-bold">情况二：DWB 写入中崩溃</div>
+                            <div class="text-xs text-slate-500">双写缓冲区副本损坏</div>
+                        </div>
+                    </label>
+                    <label class="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:border-red-300 transition-colors">
+                        <input type="radio" name="scenario" value="s3" class="w-4 h-4 text-red-600">
+                        <div class="text-sm">
+                            <div class="font-bold">情况三：ibd 写入时崩溃</div>
+                            <div class="text-xs text-slate-500">数据文件出现 Partial Write</div>
+                        </div>
+                    </label>
+                </div>
+
+                <div class="flex flex-col gap-2 pt-6">
+                    <button id="startBtn" onclick="runSimulation()" class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl font-bold transition-all shadow-md flex items-center justify-center gap-2">
+                        <i data-lucide="play" id="syncIcon" class="w-5 h-5"></i>
+                        <span id="btnText">开始演示流程</span>
+                    </button>
+
+                    <button id="recoverBtn" onclick="runRecovery()" class="hidden w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition-all shadow-md flex items-center justify-center gap-2">
+                        <i data-lucide="wrench" class="w-5 h-5"></i>
+                        启动崩溃恢复 (Crash Recovery)
+                    </button>
+
+                    <button onclick="location.reload()" class="w-full py-2 px-4 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-sm font-medium">
+                        重置状态
+                    </button>
+                </div>
+            </div>
+
+            <div id="logArea" class="p-4 bg-slate-900 rounded-xl text-[11px] font-mono text-emerald-400 min-h-[150px] leading-relaxed hidden border-t-4 border-blue-500">
+                <div class="text-slate-400 mb-2 border-b border-slate-700 pb-1 flex justify-between">
+                    <span>InnoDB 运行日志</span>
+                    <span id="lsnCounter" class="text-blue-400">LSN: 0</span>
+                </div>
+                <div id="logContent"></div>
+            </div>
+        </div>
+
+        <!-- Visualization (Right 8 columns) -->
+        <div class="lg:col-span-8 space-y-6">
+            <!-- Memory Region -->
+            <div class="p-6 bg-amber-50 rounded-3xl border-2 border-amber-200 shadow-sm relative">
+                <div class="absolute -top-3 left-6 bg-amber-500 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-sm">
+                    系统内存 (RAM)
+                </div>
+                
+                <div id="bufferPool" class="relative">
+                    <div class="text-[10px] text-amber-600 font-bold mb-4 uppercase tracking-widest">Buffer Pool - 脏页缓冲</div>
+                    <div class="flex justify-around gap-4" id="memPages"></div>
+                </div>
+            </div>
+
+            <!-- WAL Transfer Arrow -->
+            <div class="flex justify-center -my-2 relative z-10 opacity-0 transition-opacity" id="arrowWAL">
+                <div class="flex flex-col items-center">
+                    <span class="text-[9px] font-bold text-emerald-600 mb-1">WAL (预写日志)</span>
+                    <i data-lucide="arrow-down-to-line" class="w-6 h-6 text-emerald-500 anim-bounce"></i>
+                </div>
+            </div>
+
+            <!-- Disk Region -->
+            <div class="p-6 bg-slate-200/50 rounded-3xl border-2 border-slate-300 disk-area relative space-y-6 shadow-inner">
+                <div class="absolute -top-3 left-6 bg-slate-600 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-sm">
+                    磁盘存储 (DISK)
+                </div>
+
+                <!-- Redo Log Location -->
+                <div class="p-4 bg-slate-800 rounded-2xl border-2 border-slate-700 relative shadow-lg">
+                    <div class="text-[10px] text-slate-400 font-bold mb-2 uppercase tracking-widest flex items-center gap-2">
+                        <i data-lucide="scroll-text" class="w-3 h-3"></i> Redo Log File (ib_logfile0)
+                    </div>
+                    <div class="flex items-center gap-2 overflow-hidden" id="redoLogs">
+                        <div class="flex-shrink-0 bg-emerald-900/40 border border-emerald-500/30 text-emerald-500 px-3 py-1 rounded text-[10px] font-mono">LSN: 1000 [INIT]</div>
+                        <div id="redoCurrent" class="flex-shrink-0 bg-emerald-500 text-slate-900 px-3 py-1 rounded text-[10px] font-bold opacity-0 transition-all transform translate-x-10">PENDING...</div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-6">
+                    <!-- DWB Location -->
+                    <div id="dwbArea" class="relative p-4 transition-all duration-500 rounded-2xl border-2 bg-slate-50 border-slate-300 opacity-60 shadow-sm">
+                        <div class="text-[10px] text-slate-500 font-bold mb-3 uppercase tracking-widest" id="dwbLabel">Doublewrite Buffer</div>
+                        <div class="flex justify-center gap-3" id="dwbPages"></div>
+                    </div>
+
+                    <!-- IBD Location -->
+                    <div id="dataFilesArea" class="relative p-4 transition-all duration-500 rounded-2xl border-2 bg-slate-50 border-slate-300 opacity-60 shadow-sm">
+                        <div class="text-[10px] text-slate-500 font-bold mb-3 uppercase tracking-widest" id="dataLabel">Data File (.ibd)</div>
+                        <div class="flex justify-center gap-3" id="dataPages"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    lucide.createIcons();
+
+    const pages = [{ id: 1, content: 'Page A' }, { id: 2, content: 'Page B' }];
+    let isRunning = false;
+    let currentScenario = 'normal';
+    let currentLSN = 2048;
+
+    function render() {
+        const createPage = (page, type) => `
+            <div id="page-${type}-${page.id}" class="page-node w-16 h-20 rounded-lg border-2 flex flex-col items-center justify-center bg-white border-slate-300 text-slate-400 shadow-sm">
+                <i data-lucide="${type === 'mem' ? 'server' : 'database'}" class="mb-1 w-5 h-5"></i>
+                <span class="text-[9px] font-mono font-bold">${page.content}</span>
+            </div>`;
+        
+        document.getElementById('memPages').innerHTML = pages.map(p => createPage(p, 'mem')).join('');
+        document.getElementById('dwbPages').innerHTML = pages.map(p => createPage(p, 'dwb')).join('');
+        document.getElementById('dataPages').innerHTML = pages.map(p => createPage(p, 'data')).join('');
+        
+        pages.forEach(p => {
+            const el = document.getElementById(`page-mem-${p.id}`);
+            el.classList.replace('border-slate-300', 'border-amber-400');
+            el.classList.replace('text-slate-400', 'text-amber-600');
+        });
+        lucide.createIcons();
+    }
+
+    function addLog(msg, color = 'text-emerald-400') {
+        const div = document.createElement('div');
+        div.className = color;
+        div.innerText = `> ${msg}`;
+        document.getElementById('logContent').appendChild(div);
+        document.getElementById('logArea').scrollTop = document.getElementById('logArea').scrollHeight;
+    }
+
+    async function runSimulation() {
+        if (isRunning) return;
+        isRunning = true;
+        
+        const scenario = document.querySelector('input[name="scenario"]:checked').value;
+        currentScenario = scenario;
+        document.getElementById('startBtn').disabled = true;
+
+        document.getElementById('logArea').classList.remove('hidden');
+        document.getElementById('logContent').innerHTML = "";
+        
+        // 步骤 0: WAL (Write Ahead Logging)
+        addLog("正在写入 Redo Log (WAL 流程开始)...");
+        document.getElementById('arrowWAL').classList.remove('opacity-0');
+        const redo = document.getElementById('redoCurrent');
+        redo.classList.remove('opacity-0', 'translate-x-10');
+        currentLSN += 128;
+        redo.innerText = `LSN: ${currentLSN} [APPEND]`;
+        document.getElementById('lsnCounter').innerText = `LSN: ${currentLSN}`;
+        
+        await new Promise(r => setTimeout(r, 1000));
+        addLog("Redo Log 已安全持久化至磁盘日志文件。");
+
+        if (scenario === 's1') {
+            triggerCrash("情况一：在脏页进入 DWB 前崩溃 (数据已在 Redo Log)");
+            return;
+        }
+
+        // 步骤 1: 写入 DWB
+        addLog("启动脏页刷盘，首先写入 Doublewrite Buffer...");
+        document.getElementById('dwbArea').classList.remove('opacity-60');
+        document.getElementById('dwbLabel').classList.replace('text-slate-500', 'text-blue-600');
+        
+        await new Promise(r => setTimeout(r, 800));
+
+        if (scenario === 's2') {
+            const p2 = document.getElementById('page-dwb-2');
+            p2.classList.add('bg-red-100', 'border-red-400', 'text-red-600', 'shake');
+            p2.innerHTML = `<i data-lucide="alert-triangle"></i><span class="text-[9px]">CORRUPT</span>`;
+            lucide.createIcons();
+            triggerCrash("情况二：DWB 写入中断，副本损坏。");
+            return;
+        }
+
+        pages.forEach(p => {
+            const el = document.getElementById(`page-dwb-${p.id}`);
+            el.classList.add('bg-blue-600', 'border-blue-800', 'text-white');
+        });
+        addLog("Doublewrite Buffer 写入完成并已执行 fsync()。");
+
+        // 步骤 2: 写入 ibd 文件
+        await new Promise(r => setTimeout(r, 800));
+        addLog("开始向 .ibd 数据文件回写物理页...");
+        document.getElementById('dataFilesArea').classList.remove('opacity-60');
+        document.getElementById('dataLabel').classList.replace('text-slate-500', 'text-indigo-600');
+
+        if (scenario === 's3') {
+            const p2 = document.getElementById('page-data-2');
+            p2.classList.add('bg-red-500', 'border-red-700', 'text-white', 'shake');
+            p2.innerHTML = `<i data-lucide="x-circle"></i><span class="text-[9px]">PARTIAL</span>`;
+            lucide.createIcons();
+            triggerCrash("情况三：数据文件回写时断电，发生 Partial Page Write。");
+            return;
+        }
+
+        pages.forEach(p => {
+            const el = document.getElementById(`page-data-${p.id}`);
+            el.classList.add('bg-indigo-700', 'border-indigo-900', 'text-white');
+        });
+        addLog("刷新成功。CheckPoint LSN 已对齐。", "text-white font-bold");
+        isRunning = false;
+        document.getElementById('startBtn').disabled = false;
+    }
+
+    function triggerCrash(reason) {
+        addLog(`!!! 数据库异常崩溃 !!!`, "text-red-500 font-bold");
+        addLog(reason, "text-red-400 underline");
+        document.getElementById('memPages').classList.add('opacity-10');
+        document.getElementById('recoverBtn').classList.remove('hidden');
+        isRunning = false;
+    }
+
+    async function runRecovery() {
+        document.getElementById('recoverBtn').classList.add('hidden');
+        document.getElementById('recoveryOverlay').classList.remove('hidden');
+        
+        addLog("启动 MySQL 崩溃恢复程序...", "text-yellow-400 font-bold");
+        await new Promise(r => setTimeout(r, 1500));
+
+        if (currentScenario === 's1' || currentScenario === 's2') {
+            addLog("检查 ibd 文件：校验和 Pass.");
+            addLog("操作：直接从 Redo Log (LSN: " + currentLSN + ") 重放修改。", "text-emerald-400");
+        } else if (currentScenario === 's3') {
+            addLog("检查 ibd 文件：Page B 校验失败 (Checksum Error)！", "text-red-400");
+            addLog("发现 Partial Write。查找 DWB 副本...");
+            await new Promise(r => setTimeout(r, 1500));
+            addLog("找到完好副本，正在恢复 ibd 物理页...");
+            
+            const p2 = document.getElementById('page-data-2');
+            p2.classList.remove('bg-red-500', 'shake');
+            p2.classList.add('bg-emerald-600', 'text-white');
+            p2.innerHTML = `<i data-lucide="check-circle"></i><span class="text-[9px]">RECOVERED</span>`;
+            lucide.createIcons();
+            
+            await new Promise(r => setTimeout(r, 1000));
+            addLog("页修复成功。现在应用 Redo Log 补齐数据...", "text-emerald-400");
+        }
+
+        addLog("恢复完成。系统已一致。", "text-white font-bold");
+        document.getElementById('recoveryOverlay').classList.add('hidden');
+        document.getElementById('startBtn').disabled = false;
+    }
+
+    window.onload = render;
+</script>
+
+<!-- Recovery Overlay -->
+<div id="recoveryOverlay" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-lg z-50 flex items-center justify-center">
+    <div class="bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm text-center">
+        <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4">
+            <i data-lucide="refresh-cw" class="w-8 h-8 text-blue-600 animate-spin"></i>
+        </div>
+        <h3 class="text-xl font-bold text-slate-900">InnoDB Recovery</h3>
+        <p class="text-slate-500 text-sm mt-2">正在扫描 Redo Log 并验证数据页一致性...</p>
+    </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ STL List (双向链表) 原理可视化</title>
+    <style>
+        :root {
+            --node-bg: #ffffff;
+            --data-bg: #e0f2fe;
+            --pointer-next: #3b82f6; /* Blue */
+            --pointer-prev: #ef4444; /* Red */
+            --border-color: #cbd5e1;
+            --text-color: #1e293b;
+            --heap-bg: #f8fafc;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--heap-bg);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+        }
+
+        h1 { margin-bottom: 10px; }
+        p.subtitle { color: #64748b; max-width: 800px; text-align: center; margin-bottom: 30px; }
+
+        /* 控制面板 */
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            padding: 10px 18px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            color: white;
+            transition: transform 0.1s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        button.add { background-color: #10b981; }
+        button.remove { background-color: #f59e0b; }
+        button.action { background-color: #6366f1; }
+        button:active { transform: scale(0.96); }
+        button:disabled { background-color: #cbd5e1; cursor: not-allowed; }
+
+        /* 可视化区域 */
+        .viz-container {
+            width: 100%;
+            max-width: 1100px;
+            height: 400px;
+            position: relative;
+            background-color: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            overflow: hidden; /* 隐藏超出范围的 SVG 线条 */
+            display: flex;
+            align-items: center;
+            justify-content: flex-start; /* 居左开始，方便横向排列 */
+            padding: 0 50px;
+        }
+
+        /* SVG 层 */
+        #connections {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* 节点样式 */
+        .node {
+            width: 140px;
+            height: 100px;
+            background: var(--node-bg);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            position: absolute; /* 绝对定位以模拟堆内存分布 */
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 2;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+
+        /* 哨兵节点特殊样式 */
+        .node.sentinel {
+            border-style: dashed;
+            border-color: #94a3b8;
+            background-color: #f1f5f9;
+        }
+
+        .node-header {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            text-align: center;
+            padding: 2px;
+            border-bottom: 1px solid #f1f5f9;
+            background: #f8fafc;
+            border-radius: 6px 6px 0 0;
+        }
+
+        .node-body {
+            flex: 1;
+            display: flex;
+            align-items: stretch;
+        }
+
+        .ptr {
+            width: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            color: white;
+            font-weight: bold;
+        }
+
+        .ptr.prev { background-color: var(--pointer-prev); border-radius: 0 0 0 6px; cursor: help; }
+        .ptr.next { background-color: var(--pointer-next); border-radius: 0 0 6px 0; cursor: help; }
+
+        .data {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            font-weight: bold;
+            background-color: var(--data-bg);
+            color: #0369a1;
+            border-left: 1px solid #e2e8f0;
+            border-right: 1px solid #e2e8f0;
+        }
+
+        .node.sentinel .data {
+            background-color: #e2e8f0;
+            color: #64748b;
+            font-size: 0.9rem;
+            font-style: italic;
+        }
+
+        /* 地址标签 */
+        .addr-tag {
+            position: absolute;
+            top: -20px;
+            left: 0;
+            font-size: 0.7rem;
+            font-family: monospace;
+            color: #64748b;
+        }
+
+        /* 迭代器标记 */
+        .iterator-marker {
+            position: absolute;
+            bottom: -35px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            white-space: nowrap;
+            z-index: 3;
+            transition: all 0.5s ease;
+        }
+        
+        .iterator-marker::before {
+            content: '';
+            position: absolute;
+            top: -6px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 0 6px 6px 6px;
+            border-style: solid;
+            border-color: transparent transparent #1e293b transparent;
+        }
+
+        /* 代码解释区 */
+        .explanation {
+            margin-top: 20px;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            width: 100%;
+            max-width: 800px;
+        }
+
+        code {
+            background: #f1f5f9;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-family: monospace;
+            color: #d946ef;
+        }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+            font-size: 0.8rem;
+            color: #64748b;
+        }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; }
+    </style>
+</head>
+<body>
+
+    <h1>C++ STL List (双向循环链表)</h1>
+    <p class="subtitle">
+        List 由一个个离散的节点组成。演示采用了标准库常用的<b>“环状双向链表”</b>实现，其中包含一个<b>哨兵节点 (Sentinel/Header)</b>。<br>
+        <code>end()</code> 迭代器始终指向这个哨兵节点。
+    </p>
+
+    <div class="controls">
+        <button class="add" onclick="listViz.pushFront()">Push Front</button>
+        <button class="add" onclick="listViz.pushBack()">Push Back</button>
+        <button class="remove" onclick="listViz.popFront()">Pop Front</button>
+        <button class="remove" onclick="listViz.popBack()">Pop Back</button>
+        <button class="action" onclick="listViz.insertAtBegin()">Insert after Begin</button>
+        <button class="remove" onclick="listViz.eraseBegin()">Erase Begin</button>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><div class="dot" style="background:var(--pointer-prev)"></div> Prev 指针</div>
+        <div class="legend-item"><div class="dot" style="background:var(--pointer-next)"></div> Next 指针</div>
+        <div class="legend-item"><div class="dot" style="background:#94a3b8; border:1px dashed #64748b"></div> 哨兵 (end)</div>
+    </div>
+
+    <div class="viz-container" id="vizContainer">
+        <svg id="connections"></svg>
+        <!-- Nodes will be injected here -->
+    </div>
+
+    <div class="explanation">
+        <h3>当前状态解析</h3>
+        <div id="statusText" style="font-size: 0.9rem; line-height: 1.6;">
+            初始化完成。当前只有哨兵节点。<code>begin() == end()</code>，链表为空。
+        </div>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 15px 0;">
+        <div style="font-size: 0.85rem; color: #475569;">
+            <strong>特点：</strong><br>
+            1. <b>插入/删除 O(1)</b>：只需改变指针指向，无需像 vector 那样移动元素。<br>
+            2. <b>迭代器失效</b>：插入操作不会让任何迭代器失效。删除操作仅让指向被删除元素的迭代器失效。<br>
+            3. <b>内存开销</b>：每个元素额外存储两个指针 (pre, next)。
+        </div>
+    </div>
+
+    <script>
+        class Node {
+            constructor(id, value, isSentinel = false) {
+                this.id = id;
+                this.value = value;
+                this.isSentinel = isSentinel;
+                this.next = null;
+                this.prev = null;
+                // 模拟内存地址
+                this.address = isSentinel ? "0xEND" : "0x" + Math.floor(Math.random() * 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+            }
+        }
+
+        class ListVisualizer {
+            constructor() {
+                this.container = document.getElementById('vizContainer');
+                this.svg = document.getElementById('connections');
+                this.statusText = document.getElementById('statusText');
+                
+                this.nodes = [];
+                this.nodeIdCounter = 0;
+                
+                // 初始化哨兵节点
+                this.sentinel = new Node(this.nodeIdCounter++, "END", true);
+                
+                // 初始时，哨兵的 prev 和 next 都指向自己 (环状)
+                this.sentinel.next = this.sentinel;
+                this.sentinel.prev = this.sentinel;
+                
+                this.nodes.push(this.sentinel);
+                this.render();
+            }
+
+            // 获取逻辑上的“第一个”节点
+            get head() {
+                return this.sentinel.next;
+            }
+
+            // 获取逻辑上的“最后一个”节点
+            get tail() {
+                return this.sentinel.prev;
+            }
+
+            createNode(value) {
+                return new Node(this.nodeIdCounter++, value);
+            }
+
+            pushBack() {
+                const newNode = this.createNode(Math.floor(Math.random() * 100));
+                const tail = this.tail;
+
+                // 链接: tail <-> newNode
+                tail.next = newNode;
+                newNode.prev = tail;
+
+                // 链接: newNode <-> sentinel
+                newNode.next = this.sentinel;
+                this.sentinel.prev = newNode;
+
+                this.nodes.push(newNode); // 存入数组仅为了渲染方便
+                this.updateStatus(`Push Back ${newNode.value}。新节点连接到旧尾部和哨兵之间。`);
+                this.render();
+            }
+
+            pushFront() {
+                const newNode = this.createNode(Math.floor(Math.random() * 100));
+                const head = this.head;
+
+                // 链接: sentinel <-> newNode
+                this.sentinel.next = newNode;
+                newNode.prev = this.sentinel;
+
+                // 链接: newNode <-> oldHead
+                newNode.next = head;
+                head.prev = newNode;
+
+                this.nodes.push(newNode);
+                this.updateStatus(`Push Front ${newNode.value}。新节点插入到哨兵和旧头部之间。`);
+                this.render();
+            }
+
+            popBack() {
+                if (this.sentinel.next === this.sentinel) {
+                    this.updateStatus("链表为空，无法 Pop。", true);
+                    return;
+                }
+
+                const nodeToRemove = this.tail;
+                const newTail = nodeToRemove.prev;
+
+                // 断开链接并重连: newTail <-> sentinel
+                newTail.next = this.sentinel;
+                this.sentinel.prev = newTail;
+
+                // 从管理数组中移除
+                this.nodes = this.nodes.filter(n => n !== nodeToRemove);
+                this.updateStatus(`Pop Back。释放节点 ${nodeToRemove.value}。`);
+                this.render();
+            }
+
+            popFront() {
+                if (this.sentinel.next === this.sentinel) {
+                    this.updateStatus("链表为空，无法 Pop。", true);
+                    return;
+                }
+
+                const nodeToRemove = this.head;
+                const newHead = nodeToRemove.next;
+
+                // 断开链接并重连: sentinel <-> newHead
+                this.sentinel.next = newHead;
+                newHead.prev = this.sentinel;
+
+                this.nodes = this.nodes.filter(n => n !== nodeToRemove);
+                this.updateStatus(`Pop Front。释放节点 ${nodeToRemove.value}。`);
+                this.render();
+            }
+
+            insertAtBegin() {
+                // 模拟 it = begin(); it++; insert(it, val);
+                // 这里的逻辑是在第一个真实节点之后插入
+                if (this.sentinel.next === this.sentinel) {
+                    this.pushBack(); // 空的时候等于 push_back
+                    return;
+                }
+
+                const targetNode = this.head; // 我们插入在这个节点之后
+                const newNode = this.createNode(Math.floor(Math.random() * 100));
+                const nextNode = targetNode.next;
+
+                // targetNode <-> newNode
+                targetNode.next = newNode;
+                newNode.prev = targetNode;
+
+                // newNode <-> nextNode
+                newNode.next = nextNode;
+                nextNode.prev = newNode;
+
+                this.nodes.push(newNode);
+                this.updateStatus(`Insert After Begin。在 ${targetNode.value} 后插入 ${newNode.value}。`);
+                this.render();
+            }
+
+            eraseBegin() {
+                if (this.sentinel.next === this.sentinel) return;
+                this.popFront(); // erase(begin()) 等同于 pop_front
+            }
+
+            updateStatus(text, isError = false) {
+                this.statusText.innerHTML = text;
+                this.statusText.style.color = isError ? 'red' : '#1e293b';
+            }
+
+            // 渲染核心逻辑
+            render() {
+                // 清空现有 DOM
+                this.container.querySelectorAll('.node, .iterator-marker').forEach(el => el.remove());
+                this.svg.innerHTML = '';
+
+                // 1. 确定排列顺序
+                // 虽然内存是乱的，但为了可视化，我们将节点按照链表逻辑顺序横向排列
+                // 顺序：Head -> ... -> Tail -> Sentinel
+                const orderedNodes = [];
+                let current = this.sentinel.next;
+                
+                // 处理链表为空的情况，只放 sentinel
+                if (current === this.sentinel) {
+                    orderedNodes.push(this.sentinel);
+                } else {
+                    while (current !== this.sentinel) {
+                        orderedNodes.push(current);
+                        current = current.next;
+                    }
+                    orderedNodes.push(this.sentinel); // 哨兵放在最后
+                }
+
+                // 2. 计算位置并生成 DOM
+                const startX = 50;
+                const gap = 180;
+                const centerY = 150;
+
+                orderedNodes.forEach((node, index) => {
+                    const el = document.createElement('div');
+                    el.className = `node ${node.isSentinel ? 'sentinel' : ''}`;
+                    el.id = `node-${node.id}`;
+                    
+                    // 布局位置
+                    el.style.left = `${startX + index * gap}px`;
+                    el.style.top = `${centerY}px`;
+
+                    el.innerHTML = `
+                        <div class="addr-tag">${node.address}</div>
+                        <div class="node-header">Node</div>
+                        <div class="node-body">
+                            <div class="ptr prev" id="prev-${node.id}">&larr;</div>
+                            <div class="data">${node.isSentinel ? 'END' : node.value}</div>
+                            <div class="ptr next" id="next-${node.id}">&rarr;</div>
+                        </div>
+                    `;
+                    this.container.appendChild(el);
+
+                    // 添加迭代器标记
+                    if (!node.isSentinel && index === 0) {
+                        this.addIteratorMarker(startX + index * gap, centerY, 'begin()');
+                    }
+                    if (node.isSentinel) {
+                        this.addIteratorMarker(startX + index * gap, centerY, 'end()');
+                    }
+                });
+
+                // 3. 绘制连接线 (SVG)
+                // 我们需要在 DOM 渲染完成后获取坐标，所以用 setTimeout 0 或者 requestAnimationFrame
+                requestAnimationFrame(() => {
+                    orderedNodes.forEach(node => {
+                        // 绘制 Next 指针 (蓝色)
+                        this.drawArrow(node, node.next, 'next');
+                        // 绘制 Prev 指针 (红色)
+                        this.drawArrow(node, node.prev, 'prev');
+                    });
+                });
+            }
+
+            addIteratorMarker(x, y, text) {
+                const marker = document.createElement('div');
+                marker.className = 'iterator-marker';
+                marker.innerText = text;
+                // 140 is node width, marker centered
+                marker.style.left = `${x + 70}px`; 
+                marker.style.top = `${y + 110}px`;
+                this.container.appendChild(marker);
+            }
+
+            drawArrow(fromNode, toNode, type) {
+                const fromEl = document.getElementById(type === 'next' ? `next-${fromNode.id}` : `prev-${fromNode.id}`);
+                const toEl = document.getElementById(`node-${toNode.id}`); // 指向整个节点块
+                
+                if (!fromEl || !toEl) return;
+
+                const containerRect = this.container.getBoundingClientRect();
+                const fRect = fromEl.getBoundingClientRect();
+                const tRect = toEl.getBoundingClientRect();
+
+                // 转换为相对于 container 的坐标
+                const startX = fRect.left - containerRect.left + fRect.width / 2;
+                const startY = fRect.top - containerRect.top + fRect.height / 2;
+                
+                let endX, endY;
+
+                // 简单的布局逻辑：
+                // 如果是 next 指针，通常指向右边节点的左侧。
+                // 如果是 prev 指针，通常指向左边节点的右侧。
+                // 如果是回环（哨兵 <-> 头/尾），需要画大弧线。
+
+                const isLoopBack = (type === 'next' && toNode === this.sentinel.next) || // Tail -> Head (via sentinel logic)
+                                   (type === 'prev' && toNode === this.sentinel.prev);   // Head -> Tail? No.
+                
+                // 修正：在我们的视觉排列中，Sentinal 在最右侧。
+                // Next 指针：Node[i] -> Node[i+1]。Sentinal -> Head (回环到最左)
+                // Prev 指针：Node[i] -> Node[i-1]。Head -> Sentinal (回环到最右)
+
+                if (type === 'next') {
+                    if (toNode === this.sentinel.next && this.nodes.length > 1) { 
+                        // Sentinel next 指向 Head (视觉最右 -> 视觉最左)
+                        endX = tRect.left - containerRect.left + 70; // 指向节点顶部中心
+                        endY = tRect.top - containerRect.top;
+                        this.createPath(startX, startY, endX, endY, varColor('pointer-next'), 'top-arch');
+                    } else {
+                        // 普通向右指向
+                        endX = tRect.left - containerRect.left;
+                        endY = tRect.top - containerRect.top + 30; // 稍微偏上对应 next 对齐
+                        this.createPath(startX, startY, endX, endY, varColor('pointer-next'), 'straight');
+                    }
+                } else { // type === 'prev'
+                    if (toNode === this.sentinel.prev && this.nodes.length > 1) {
+                         // Head prev 指向 Sentinel (视觉最左 -> 视觉最右)
+                         // 但因为我们按顺序排列，Head(index 0) 的 prev 指向 Sentinel(index last)
+                         // 这是一个很长的向右的线? 不，是 Sentinel 在最右。
+                         // 等等，Sentinel.next 是 Head。
+                         
+                         // 让我们看视觉顺序:
+                         // Head ... Tail Sentinel
+                         
+                         // Head.prev -> Sentinel. 这是一个从最左指向最右的线 (底部大弧线)
+                         if (fromNode === this.sentinel.next) {
+                            endX = tRect.left - containerRect.left + 70; // 底部中心
+                            endY = tRect.bottom - containerRect.top;
+                            this.createPath(startX, startY, endX, endY, varColor('pointer-prev'), 'bottom-arch');
+                         } else {
+                            // 普通向左指向
+                            endX = tRect.right - containerRect.left;
+                            endY = tRect.top - containerRect.top + 70; // 稍微偏下
+                            this.createPath(startX, startY, endX, endY, varColor('pointer-prev'), 'straight');
+                         }
+                    } else {
+                        // 普通 Prev
+                        endX = tRect.right - containerRect.left;
+                        endY = tRect.top - containerRect.top + 70;
+                        this.createPath(startX, startY, endX, endY, varColor('pointer-prev'), 'straight');
+                    }
+                }
+            }
+
+            createPath(x1, y1, x2, y2, color, style) {
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                let d = "";
+
+                if (style === 'straight') {
+                    // 贝塞尔曲线连接相邻节点
+                    const c1x = x1 + (x2 - x1) / 2;
+                    const c1y = y1;
+                    const c2x = x1 + (x2 - x1) / 2;
+                    const c2y = y2;
+                    d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
+                } else if (style === 'top-arch') {
+                    // 上方大弧线 (Sentinel -> Head)
+                    d = `M ${x1} ${y1} Q ${(x1+x2)/2} ${y1 - 100} ${x2} ${y2}`;
+                } else if (style === 'bottom-arch') {
+                    // 下方大弧线 (Head -> Sentinel)
+                    d = `M ${x1} ${y1} Q ${(x1+x2)/2} ${y1 + 100} ${x2} ${y2}`;
+                }
+
+                path.setAttribute("d", d);
+                path.setAttribute("stroke", color);
+                path.setAttribute("stroke-width", "2");
+                path.setAttribute("fill", "none");
+                path.setAttribute("marker-end", `url(#arrow-${color === varColor('pointer-next') ? 'blue' : 'red'})`);
+                this.svg.appendChild(path);
+            }
+        }
+
+        // 辅助：获取 CSS 变量颜色
+        function varColor(name) {
+            return getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
+        }
+
+        // 初始化箭头定义
+        const svg = document.getElementById('connections');
+        const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+        
+        function createMarker(id, color) {
+            const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+            marker.setAttribute("id", id);
+            marker.setAttribute("markerWidth", "10");
+            marker.setAttribute("markerHeight", "7");
+            marker.setAttribute("refX", "9"); // 调整箭头位置
+            marker.setAttribute("refY", "3.5");
+            marker.setAttribute("orient", "auto");
+            const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            polygon.setAttribute("points", "0 0, 10 3.5, 0 7");
+            polygon.setAttribute("fill", color);
+            marker.appendChild(polygon);
+            return marker;
+        }
+
+        // 这里需要硬编码颜色，因为 SVG defs 还没插入 DOM 拿不到 CSS 变量
+        defs.appendChild(createMarker("arrow-blue", "#3b82f6"));
+        defs.appendChild(createMarker("arrow-red", "#ef4444"));
+        svg.appendChild(defs);
+
+        const listViz = new ListVisualizer();
+
+    </script>
+</body>
+</html>

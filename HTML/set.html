@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ STL std::set (Red-Black Tree) 过程演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8fafc;
+        }
+        .canvas-container {
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        /* 节点平滑过渡动画 */
+        .node-group {
+            transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .node-circle {
+            transition: fill 0.3s ease, stroke 0.3s ease, stroke-width 0.3s ease;
+        }
+        
+        /* 代码高亮样式 */
+        .keyword { color: #c678dd; }
+        .type { color: #e5c07b; }
+        .function { color: #61afef; }
+        .number { color: #d19a66; }
+        .comment { color: #9ca3af; font-style: italic; }
+        .macro { color: #e06c75; }
+
+        /* 禁用状态 */
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            filter: grayscale(100%);
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden text-slate-800">
+
+    <!-- 顶部导航 -->
+    <header class="bg-slate-900 text-white p-3 shadow-md shrink-0 z-20">
+        <div class="flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+                <h1 class="text-lg font-bold flex items-center gap-2">
+                    <span class="bg-red-600 px-2 py-0.5 rounded text-sm font-mono">RB-Tree</span> 
+                    std::set 过程可视化
+                </h1>
+                <p class="text-xs text-slate-400" id="statusText">
+                    Ready.
+                </p>
+            </div>
+            
+            <div class="flex gap-2 bg-slate-800 p-1.5 rounded-lg border border-slate-700">
+                <input type="number" id="valueInput" placeholder="Int" class="px-2 py-1 rounded text-slate-900 w-20 text-sm outline-none focus:ring-2 focus:ring-red-500 font-mono">
+                <button id="btnInsert" onclick="visualizer.insert()" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1">Insert</button>
+                <button id="btnErase" onclick="visualizer.erase()" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded text-xs font-bold transition">Erase</button>
+                <button id="btnFind" onclick="visualizer.find()" class="bg-yellow-600 hover:bg-yellow-500 px-3 py-1 rounded text-xs font-bold transition text-black">Find</button>
+                <button id="btnClear" onclick="visualizer.clear()" class="bg-slate-600 hover:bg-slate-500 px-3 py-1 rounded text-xs font-bold transition">Clear</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主布局 -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden">
+        
+        <!-- 左侧：红黑树逻辑视图 -->
+        <section class="flex-1 flex flex-col relative bg-white">
+            <div class="absolute top-3 left-3 bg-white/95 p-3 rounded-lg shadow-lg border border-slate-200 text-sm z-10 backdrop-blur-sm pointer-events-none">
+                <div class="font-bold text-slate-800 mb-1 border-b border-slate-100 pb-1">逻辑视图 (Logical View)</div>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div class="text-slate-500">Size:</div>
+                    <div id="setSize" class="font-mono font-bold text-blue-600">0</div>
+                    <div class="text-slate-500">Root Color:</div>
+                    <div id="rootColor" class="font-mono font-bold text-slate-800">-</div>
+                </div>
+                <div class="mt-2 flex items-center gap-3 text-xs border-t border-slate-100 pt-2">
+                    <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-slate-900 border border-slate-600"></span> Black</div>
+                    <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-red-500 border border-red-300"></span> Red</div>
+                    <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full border-2 border-orange-400"></span> Visiting</div>
+                </div>
+            </div>
+
+            <!-- SVG 画布 -->
+            <div class="canvas-container w-full h-full overflow-auto relative cursor-grab active:cursor-grabbing" id="treeContainer">
+                <svg id="treeSvg" width="100%" height="100%" class="block min-w-[600px] min-h-[400px]"></svg>
+            </div>
+        </section>
+
+        <!-- 右侧：内存与代码 -->
+        <section class="w-full md:w-[450px] flex flex-col border-l border-slate-200 bg-slate-50 shadow-xl z-10">
+            
+            <!-- 栈区 -->
+            <div class="p-3 border-b border-slate-200 bg-white">
+                <div class="flex justify-between items-center mb-1">
+                    <h2 class="font-bold text-xs text-slate-600 uppercase tracking-wider">Stack Memory</h2>
+                    <span class="text-[10px] font-mono text-slate-400">High Address</span>
+                </div>
+                <div class="bg-slate-100 rounded border border-slate-200 p-2 font-mono text-xs shadow-inner">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-blue-700 font-bold">std::set&lt;int&gt; s</span>
+                        <span class="text-slate-400">@0x7FFF...E4</span>
+                    </div>
+                    <div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[10px]">
+                        <span class="text-slate-500">_M_header</span>
+                        <span id="stackRootPtr" class="bg-white px-1 border rounded text-purple-600">nullptr</span>
+                        <span class="text-slate-500">_M_node_count</span>
+                        <span id="stackSizeVal" class="text-slate-700 font-bold">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 堆区 -->
+            <div class="flex-1 flex flex-col overflow-hidden bg-slate-50">
+                <div class="p-3 pb-1 flex justify-between items-center">
+                    <h2 class="font-bold text-xs text-slate-600 uppercase tracking-wider">Heap Memory</h2>
+                    <span class="text-[10px] font-mono text-slate-400">Low Address</span>
+                </div>
+                
+                <div class="flex-1 overflow-auto px-3 pb-3">
+                    <div class="bg-white rounded border border-slate-200 shadow-sm overflow-hidden min-w-[380px]">
+                        <table class="w-full text-[10px] text-left table-fixed">
+                            <thead class="bg-slate-100 text-slate-600 border-b border-slate-200 font-semibold">
+                                <tr>
+                                    <th class="p-1.5 w-14 text-center">Addr</th>
+                                    <th class="p-1.5 w-6 text-center">C</th>
+                                    <th class="p-1.5 w-8 text-center">Val</th>
+                                    <th class="p-1.5 w-12 text-center text-xs">P*</th>
+                                    <th class="p-1.5 w-12 text-center text-xs">L*</th>
+                                    <th class="p-1.5 w-12 text-center text-xs">R*</th>
+                                </tr>
+                            </thead>
+                            <tbody id="memoryTableBody" class="font-mono text-slate-700 divide-y divide-slate-100">
+                                <!-- JS填充 -->
+                            </tbody>
+                        </table>
+                        <div id="emptyMemMsg" class="p-8 text-center text-slate-400 italic text-xs">
+                            Heap is empty.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 代码控制台 -->
+            <div class="h-48 bg-[#1e1e1e] text-white p-2 font-mono text-[10px] overflow-auto flex flex-col shrink-0 border-t border-slate-600">
+                <div class="text-slate-500 border-b border-slate-700 pb-1 mb-1 sticky top-0 bg-[#1e1e1e] flex justify-between">
+                    <span>Operation Log</span>
+                    <span class="text-xs cursor-pointer hover:text-white" onclick="document.getElementById('consoleOutput').innerHTML=''">[Clear]</span>
+                </div>
+                <div id="consoleOutput" class="flex-1 space-y-1 pb-2"></div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // -----------------------
+        // 常量与辅助
+        // -----------------------
+        const RED = 'RED';
+        const BLACK = 'BLACK';
+        const DELAY_FAST = 400;  // 毫秒
+        const DELAY_SLOW = 800;  // 毫秒
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        class RBNode {
+            constructor(value, parent = null) {
+                this.value = value;
+                this.color = RED; // Standard RB insert is always RED
+                this.left = null;
+                this.right = null;
+                this.parent = parent;
+                this.address = '0x' + (0x1000 + Math.floor(Math.random() * 0xFFFF) * 8).toString(16).toUpperCase();
+                this.x = 0;
+                this.y = 0;
+            }
+        }
+
+        class RBTreeVisualizer {
+            constructor() {
+                this.root = null;
+                this.size = 0;
+                this.isAnimating = false;
+                
+                this.svg = document.getElementById('treeSvg');
+                this.console = document.getElementById('consoleOutput');
+                this.memBody = document.getElementById('memoryTableBody');
+                this.statusText = document.getElementById('statusText');
+                
+                this.log(`<span class="comment">// std::set&lt;int&gt; initialized.</span>`);
+                this.render();
+            }
+
+            // --- UI 控制 ---
+            setBusy(busy, msg = "") {
+                this.isAnimating = busy;
+                this.statusText.textContent = busy ? `Executing: ${msg}...` : "Ready.";
+                const buttons = ['btnInsert', 'btnErase', 'btnFind', 'btnClear'];
+                buttons.forEach(id => {
+                    document.getElementById(id).disabled = busy;
+                });
+            }
+
+            // --- 核心：插入 (Async) ---
+            async insert() {
+                if (this.isAnimating) return;
+                const val = this.getInput();
+                if (val === null) return;
+
+                this.setBusy(true, "Insert " + val);
+                this.log(`<span class="keyword">auto</span> res = s.<span class="function">insert</span>(<span class="number">${val}</span>);`);
+
+                // 1. 模拟 BST 查找插入位置
+                let y = null;
+                let x = this.root;
+                
+                this.log(`&nbsp;&nbsp;<span class="comment">// 1. BST Search for position...</span>`);
+                
+                while (x !== null) {
+                    this.render(); // Clear previous highlights
+                    this.highlightNode(x.value, 'orange'); // 橙色表示正在比较
+                    await sleep(DELAY_FAST);
+
+                    y = x;
+                    if (val === x.value) {
+                        this.log(`&nbsp;&nbsp;<span class="comment">// Found duplicate ${val}. Return existing.</span>`);
+                        this.highlightNode(x.value, 'red');
+                        await sleep(DELAY_SLOW);
+                        this.render();
+                        this.setBusy(false);
+                        return;
+                    } else if (val < x.value) {
+                        x = x.left;
+                    } else {
+                        x = x.right;
+                    }
+                }
+
+                // 2. 插入新节点
+                let z = new RBNode(val, y);
+                if (y === null) this.root = z;
+                else if (val < y.value) y.left = z;
+                else y.right = z;
+                
+                this.size++;
+                this.log(`&nbsp;&nbsp;<span class="comment">// 2. Insert <span class="macro">RED</span> node at ${z.address}.</span>`);
+                this.render();
+                this.highlightNode(z.value, 'green'); // 绿色表示新分配
+                await sleep(DELAY_SLOW);
+
+                // 3. 红黑树修复
+                this.log(`&nbsp;&nbsp;<span class="comment">// 3. Rebalance (Fixup)...</span>`);
+                await this.insertFixup(z);
+                
+                this.render();
+                this.setBusy(false);
+            }
+
+            // 修复算法 (Async)
+            async insertFixup(z) {
+                while (z.parent && z.parent.color === RED) {
+                    this.render();
+                    // 高亮违规的父子红节点
+                    this.highlightNode(z.value, 'red'); 
+                    this.highlightNode(z.parent.value, 'red');
+                    await sleep(DELAY_SLOW);
+
+                    if (z.parent === z.parent.parent.left) {
+                        let y = z.parent.parent.right; // 叔叔
+                        
+                        // Case 1: Uncle is RED
+                        if (y && y.color === RED) {
+                            this.log(`&nbsp;&nbsp;<span class="comment">// [Case 1] Uncle Red -> Recolor Parent/Uncle Black, GP Red.</span>`);
+                            z.parent.color = BLACK;
+                            y.color = BLACK;
+                            z.parent.parent.color = RED;
+                            z = z.parent.parent;
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                        } else {
+                            // Case 2: Uncle Black, Z is Right Child
+                            if (z === z.parent.right) {
+                                z = z.parent;
+                                this.log(`&nbsp;&nbsp;<span class="comment">// [Case 2] Uncle Black, Z is Right -> Left Rotate Parent.</span>`);
+                                this.leftRotate(z);
+                                this.render();
+                                await sleep(DELAY_SLOW);
+                            }
+                            // Case 3: Uncle Black, Z is Left Child
+                            this.log(`&nbsp;&nbsp;<span class="comment">// [Case 3] Uncle Black, Z is Left -> Recolor + Right Rotate GP.</span>`);
+                            z.parent.color = BLACK;
+                            z.parent.parent.color = RED;
+                            this.render(); // Show recolor first
+                            await sleep(DELAY_SLOW);
+                            
+                            this.rightRotate(z.parent.parent);
+                            this.render(); // Show rotation
+                            await sleep(DELAY_SLOW);
+                        }
+                    } else {
+                        // Symmetric Cases
+                        let y = z.parent.parent.left;
+                        if (y && y.color === RED) {
+                            this.log(`&nbsp;&nbsp;<span class="comment">// [Case 1] Uncle Red -> Recolor.</span>`);
+                            z.parent.color = BLACK;
+                            y.color = BLACK;
+                            z.parent.parent.color = RED;
+                            z = z.parent.parent;
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                        } else {
+                            if (z === z.parent.left) {
+                                z = z.parent;
+                                this.log(`&nbsp;&nbsp;<span class="comment">// [Case 2] Rotate Right.</span>`);
+                                this.rightRotate(z);
+                                this.render();
+                                await sleep(DELAY_SLOW);
+                            }
+                            this.log(`&nbsp;&nbsp;<span class="comment">// [Case 3] Recolor + Rotate Left.</span>`);
+                            z.parent.color = BLACK;
+                            z.parent.parent.color = RED;
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                            
+                            this.leftRotate(z.parent.parent);
+                            this.render();
+                            await sleep(DELAY_SLOW);
+                        }
+                    }
+                }
+                if (this.root.color === RED) {
+                    this.root.color = BLACK;
+                    this.log(`&nbsp;&nbsp;<span class="comment">// Fixup: Ensure root is BLACK.</span>`);
+                    this.render();
+                }
+            }
+
+            // --- 查找 (Async) ---
+            async find() {
+                if (this.isAnimating) return;
+                const val = this.getInput();
+                if (val === null) return;
+
+                this.setBusy(true, "Finding " + val);
+                this.log(`s.<span class="function">find</span>(<span class="number">${val}</span>);`);
+
+                let x = this.root;
+                let found = false;
+
+                while (x !== null) {
+                    this.render();
+                    this.highlightNode(x.value, 'orange');
+                    await sleep(DELAY_FAST);
+
+                    if (val === x.value) {
+                        found = true;
+                        this.log(`&nbsp;&nbsp;<span class="comment">// Found at ${x.address}.</span>`);
+                        this.highlightNode(x.value, 'green'); // Found!
+                        break;
+                    } else if (val < x.value) {
+                        x = x.left;
+                    } else {
+                        x = x.right;
+                    }
+                }
+
+                if (!found) {
+                    this.log(`&nbsp;&nbsp;<span class="comment">// Not found.</span>`);
+                }
+
+                this.setBusy(false);
+                // Keep highlight for a moment then clear
+                setTimeout(() => this.render(), 1500);
+            }
+
+            // --- 删除 (Async & Simplified) ---
+            async erase() {
+                if (this.isAnimating) return;
+                const val = this.getInput();
+                if (val === null) return;
+
+                this.setBusy(true, "Erase " + val);
+                this.log(`s.<span class="function">erase</span>(<span class="number">${val}</span>);`);
+
+                // 1. Search
+                let x = this.root;
+                let foundNode = null;
+                while (x !== null) {
+                    this.render();
+                    this.highlightNode(x.value, 'orange');
+                    await sleep(DELAY_FAST);
+                    
+                    if (val === x.value) {
+                        foundNode = x;
+                        break;
+                    } else if (val < x.value) x = x.left;
+                    else x = x.right;
+                }
+
+                if (!foundNode) {
+                    this.log(`&nbsp;&nbsp;<span class="comment">// Node not found.</span>`);
+                    this.setBusy(false);
+                    this.render();
+                    return;
+                }
+
+                this.highlightNode(foundNode.value, 'red');
+                this.log(`&nbsp;&nbsp;<span class="comment">// Node found. Removing...</span>`);
+                await sleep(DELAY_SLOW);
+
+                // 2. Perform Delete
+                // Note: Full RB-Delete visualization is extremely complex.
+                // We will animate the replacement if it has 2 children.
+                await this.deleteNodeAsync(foundNode);
+                
+                this.size--;
+                if (this.root) this.root.color = BLACK;
+                this.render();
+                this.log(`&nbsp;&nbsp;<span class="comment">// Node erased.</span>`);
+                this.setBusy(false);
+            }
+
+            async deleteNodeAsync(node) {
+                // Case: 2 Children -> Find successor
+                if (node.left && node.right) {
+                    this.log(`&nbsp;&nbsp;<span class="comment">// Node has 2 children. Finding successor...</span>`);
+                    let successor = node.right;
+                    while (successor.left) {
+                        this.render();
+                        this.highlightNode(node.value, 'red'); // Keep target highlighted
+                        this.highlightNode(successor.value, 'orange');
+                        await sleep(DELAY_FAST);
+                        successor = successor.left;
+                    }
+                    this.render();
+                    this.highlightNode(successor.value, 'green');
+                    await sleep(DELAY_SLOW);
+
+                    this.log(`&nbsp;&nbsp;<span class="comment">// Swapping value with ${successor.value}.</span>`);
+                    node.value = successor.value;
+                    // Address usually doesn't swap in std::set, but logic does. 
+                    // We recursively delete the successor position.
+                    await this.deleteNodeAsync(successor);
+                } else {
+                    // Case: 0 or 1 Child
+                    let child = node.left ? node.left : node.right;
+                    
+                    // Linking
+                    if (node.parent) {
+                        if (node === node.parent.left) node.parent.left = child;
+                        else node.parent.right = child;
+                    } else {
+                        this.root = child;
+                    }
+                    if (child) child.parent = node.parent;
+                }
+            }
+
+            // --- 旋转逻辑 (无动画，因为在Fixup中被包裹了动画) ---
+            leftRotate(x) {
+                let y = x.right;
+                x.right = y.left;
+                if (y.left) y.left.parent = x;
+                y.parent = x.parent;
+                if (!x.parent) this.root = y;
+                else if (x === x.parent.left) x.parent.left = y;
+                else x.parent.right = y;
+                y.left = x;
+                x.parent = y;
+            }
+
+            rightRotate(x) {
+                let y = x.left;
+                x.left = y.right;
+                if (y.right) y.right.parent = x;
+                y.parent = x.parent;
+                if (!x.parent) this.root = y;
+                else if (x === x.parent.right) x.parent.right = y;
+                else x.parent.left = y;
+                y.right = x;
+                x.parent = y;
+            }
+
+            clear() {
+                if(this.isAnimating) return;
+                this.root = null;
+                this.size = 0;
+                this.log(`s.<span class="function">clear</span>();`);
+                this.render();
+            }
+
+            // --- 渲染与视图 ---
+
+            render() {
+                // Update stats
+                document.getElementById('setSize').innerText = this.size;
+                document.getElementById('stackSizeVal').innerText = this.size;
+                document.getElementById('rootColor').innerText = this.root ? (this.root.color === RED ? 'RED' : 'BLACK') : '-';
+                document.getElementById('rootColor').className = `font-mono font-bold ${this.root && this.root.color === RED ? 'text-red-500' : 'text-slate-800'}`;
+                
+                const stackRoot = document.getElementById('stackRootPtr');
+                if (this.root) {
+                    stackRoot.innerText = this.root.address;
+                    stackRoot.className = "bg-purple-100 px-1 border border-purple-200 rounded text-purple-700 font-bold";
+                } else {
+                    stackRoot.innerText = "nullptr";
+                    stackRoot.className = "bg-white px-1 border rounded text-slate-400 italic";
+                }
+
+                // Draw Tree
+                this.svg.innerHTML = '';
+                this.calculateLayout();
+                this.drawTree(this.root);
+
+                // Draw Memory
+                this.renderMemory();
+            }
+
+            calculateLayout() {
+                if (!this.root) return;
+                const depth = this.getDepth(this.root);
+                const width = Math.max(800, Math.pow(2, depth) * 50);
+                this._traversePos(this.root, width/2, 40, width/4);
+                this.svg.setAttribute('viewBox', `0 0 ${width} ${(depth * 70) + 100}`);
+            }
+
+            _traversePos(node, x, y, offset) {
+                if (!node) return;
+                node.x = x;
+                node.y = y;
+                this._traversePos(node.left, x - offset, y + 70, offset/2);
+                this._traversePos(node.right, x + offset, y + 70, offset/2);
+            }
+
+            getDepth(node) {
+                if (!node) return 0;
+                return 1 + Math.max(this.getDepth(node.left), this.getDepth(node.right));
+            }
+
+            drawTree(node) {
+                if (!node) return;
+                if (node.left) this.drawLine(node, node.left);
+                if (node.right) this.drawLine(node, node.right);
+                this.drawTree(node.left);
+                this.drawTree(node.right);
+
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'node-group');
+                g.setAttribute('id', `node-${node.value}`);
+                
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('class', 'node-circle');
+                circle.setAttribute('cx', node.x);
+                circle.setAttribute('cy', node.y);
+                circle.setAttribute('r', '20');
+                circle.setAttribute('fill', node.color === RED ? '#ef4444' : '#1e293b');
+                circle.setAttribute('stroke', '#fff');
+                circle.setAttribute('stroke-width', '2');
+                circle.setAttribute('filter', 'drop-shadow(0px 2px 2px rgba(0,0,0,0.3))');
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', node.x);
+                text.setAttribute('y', node.y);
+                text.setAttribute('dy', '0.35em');
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', 'white');
+                text.setAttribute('font-weight', 'bold');
+                text.setAttribute('font-size', '14px');
+                text.textContent = node.value;
+
+                const addr = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                addr.setAttribute('x', node.x);
+                addr.setAttribute('y', node.y + 35);
+                addr.setAttribute('text-anchor', 'middle');
+                addr.setAttribute('fill', '#64748b');
+                addr.setAttribute('font-size', '10px');
+                addr.setAttribute('font-family', 'monospace');
+                addr.textContent = node.address;
+
+                g.appendChild(circle);
+                g.appendChild(text);
+                g.appendChild(addr);
+                this.svg.appendChild(g);
+            }
+
+            drawLine(n1, n2) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', n1.x);
+                line.setAttribute('y1', n1.y);
+                line.setAttribute('x2', n2.x);
+                line.setAttribute('y2', n2.y);
+                line.setAttribute('stroke', '#cbd5e1');
+                line.setAttribute('stroke-width', '2');
+                this.svg.appendChild(line);
+            }
+
+            renderMemory() {
+                this.memBody.innerHTML = '';
+                const nodes = [];
+                const collect = n => { if(!n) return; collect(n.left); nodes.push(n); collect(n.right); };
+                collect(this.root);
+
+                if (nodes.length === 0) {
+                    document.getElementById('emptyMemMsg').style.display = 'block';
+                    return;
+                }
+                document.getElementById('emptyMemMsg').style.display = 'none';
+
+                nodes.forEach(node => {
+                    const row = document.createElement('tr');
+                    row.className = 'border-b border-slate-50 transition-colors duration-500';
+                    row.id = `mem-${node.value}`;
+                    
+                    const ptr = (n) => n ? n.address : '<span class="text-slate-300">nullptr</span>';
+                    const colorBadge = node.color === RED 
+                        ? `<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1"></span>R`
+                        : `<span class="inline-block w-2 h-2 rounded-full bg-slate-800 mr-1"></span>B`;
+
+                    row.innerHTML = `
+                        <td class="p-1.5 text-purple-600 font-bold text-center">${node.address}</td>
+                        <td class="p-1.5 text-center font-bold">${colorBadge}</td>
+                        <td class="p-1.5 text-center font-bold text-slate-800 text-xs">${node.value}</td>
+                        <td class="p-1.5 text-center text-slate-500 font-mono scale-90">${ptr(node.parent)}</td>
+                        <td class="p-1.5 text-center text-slate-500 font-mono scale-90">${ptr(node.left)}</td>
+                        <td class="p-1.5 text-center text-slate-500 font-mono scale-90">${ptr(node.right)}</td>
+                    `;
+                    this.memBody.appendChild(row);
+                });
+            }
+
+            log(html) {
+                const div = document.createElement('div');
+                div.innerHTML = `> ${html}`;
+                this.console.appendChild(div);
+                this.console.scrollTop = this.console.scrollHeight;
+            }
+
+            getInput() {
+                const el = document.getElementById('valueInput');
+                const val = parseInt(el.value);
+                if (isNaN(val)) return null;
+                el.value = '';
+                el.focus();
+                return val;
+            }
+
+            // 增强版高亮：可以直接在 DOM 上操作，不必每次重绘
+            highlightNode(val, type) {
+                const g = document.getElementById(`node-${val}`);
+                const row = document.getElementById(`mem-${val}`);
+                
+                if (g) {
+                    const circle = g.querySelector('circle');
+                    let color = '#facc15'; // Default Orange
+                    if (type === 'red') color = '#ef4444';
+                    if (type === 'green') color = '#22c55e';
+                    
+                    circle.setAttribute('stroke', color);
+                    circle.setAttribute('stroke-width', '4');
+                }
+                if (row) {
+                    row.classList.add('bg-yellow-100');
+                    setTimeout(() => row.classList.remove('bg-yellow-100'), 500);
+                }
+            }
+        }
+
+        const visualizer = new RBTreeVisualizer();
+
+        // 初始自动演示，使用 async 函数封装
+        (async () => {
+            // Wait for user to settle
+            await sleep(1000);
+            document.getElementById('valueInput').value = 10; 
+            await visualizer.insert();
+            
+            document.getElementById('valueInput').value = 20; 
+            await visualizer.insert();
+            
+            // 提示用户下一步操作将触发旋转
+            visualizer.log(`<br><span class="text-yellow-400 font-bold">Try inserting 30 to see rotation!</span>`);
+        })();
+
+    </script>
+</body>
+</html>

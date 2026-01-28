@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ std::array 原理可视化 (交互增强版)</title>
+    <style>
+        :root {
+            --primary-color: #3b82f6;
+            --secondary-color: #10b981;
+            --danger-color: #ef4444;
+            --warning-color: #f59e0b;
+            --bg-color: #f8fafc;
+            --panel-bg: #ffffff;
+            --border-color: #cbd5e1;
+            --code-bg: #1e293b;
+            --text-color: #334155;
+            --selected-border: #2563eb;
+            --selected-bg: #eff6ff;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        h1 { margin-top: 0; color: #1e293b; font-size: 1.5rem; }
+        
+        .subtitle {
+            color: #64748b;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+            max-width: 800px;
+            text-align: center;
+        }
+
+        .main-container {
+            display: flex;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* 左侧控制面板 */
+        .controls {
+            flex: 0 0 320px;
+            background: var(--panel-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+        }
+
+        .control-group {
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 15px;
+        }
+
+        .control-group h3 {
+            margin: 0 0 10px 0;
+            font-size: 0.95rem;
+            color: #475569;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn-reset {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            background: #cbd5e1;
+            border: none;
+            width: auto;
+            margin: 0;
+            cursor: pointer;
+        }
+        .btn-reset:hover { background: #94a3b8; color: white; }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 8px;
+            background-color: white;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: 600;
+            text-align: left;
+            transition: all 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: #f1f5f9;
+            border-color: var(--primary-color);
+            transform: translateX(4px);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            background-color: #f1f5f9;
+            color: #94a3b8;
+        }
+
+        .btn-tag {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: white;
+            font-family: sans-serif;
+            margin-left: 5px;
+            white-space: nowrap;
+        }
+        .tag-safe { background-color: var(--secondary-color); }
+        .tag-unsafe { background-color: var(--danger-color); }
+        .tag-slow { background-color: var(--warning-color); }
+        .tag-init { background-color: #60a5fa; }
+
+        /* 日志区域 */
+        .log-panel {
+            flex: 1;
+            background: var(--code-bg);
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Consolas', monospace;
+            font-size: 0.8rem;
+            overflow-y: auto;
+            border: 1px solid #334155;
+            margin-top: auto; 
+            max-height: 250px;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 2px;
+            animation: fadeIn 0.3s;
+            line-height: 1.4;
+        }
+        .log-error { color: #fca5a5; }
+        .log-success { color: #86efac; }
+        .log-warn { color: #fde047; }
+
+        /* 右侧可视化区域 */
+        .viz-area {
+            flex: 1;
+            background: var(--panel-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        /* 栈内存模拟 */
+        .stack-memory {
+            width: 420px; /* Wider for selection border */
+            border: 2px solid #94a3b8;
+            border-top: 2px dashed #94a3b8; 
+            border-bottom: 2px solid #94a3b8;
+            background-color: #f1f5f9;
+            padding: 40px 20px 20px 20px;
+            position: relative;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column; 
+            gap: 15px;
+            max-height: 100%;
+            overflow-y: auto;
+        }
+
+        .stack-memory::before {
+            content: "Stack Memory (高地址 -> 低地址)";
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.9rem;
+            color: #64748b;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+
+        .stack-frame {
+            border: 2px solid #60a5fa;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 25px 15px 15px 15px;
+            border-radius: 8px;
+            position: relative;
+            display: flex;
+            flex-direction: column-reverse; 
+            gap: 12px;
+            min-height: 100px;
+        }
+
+        .stack-frame::after {
+            content: "Stack Frame: main()";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: #eff6ff;
+            color: #2563eb;
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            font-weight: bold;
+            border-bottom: 1px solid #60a5fa;
+            border-radius: 6px 6px 0 0;
+        }
+
+        /* Array 对象 */
+        .array-container {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            position: relative;
+            transition: all 0.3s;
+            animation: slideIn 0.4s ease-out;
+            padding: 8px;
+            border: 2px solid transparent;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        /* 选中状态 */
+        .array-container.selected {
+            border-color: var(--selected-border);
+            background-color: var(--selected-bg);
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+        }
+
+        /* Hover effect to hint selection */
+        .array-container:hover:not(.selected) {
+            border-color: #cbd5e1;
+            background-color: #f8fafc;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .array-label {
+            font-family: monospace;
+            font-weight: bold;
+            color: #334155;
+            margin-bottom: 2px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            padding: 0 2px;
+        }
+
+        .array-blocks {
+            display: flex;
+            border: 2px solid #334155;
+            background-color: #e2e8f0; 
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .element-block {
+            width: 60px;
+            height: 50px;
+            background-color: #bfdbfe;
+            border-right: 1px solid #60a5fa;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            transition: background-color 0.3s, transform 0.2s;
+        }
+
+        .element-block:last-child {
+            border-right: none;
+        }
+
+        .val-text {
+            font-family: monospace;
+            font-weight: bold;
+            font-size: 1rem;
+            z-index: 2;
+        }
+        
+        .garbage-val {
+            color: #ef4444;
+            font-style: italic;
+            font-size: 0.8rem;
+        }
+
+        .element-block.highlight {
+            background-color: #fde047 !important;
+            transform: scale(1.1);
+            z-index: 10;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+
+        .element-block.access {
+            background-color: #86efac !important;
+        }
+
+        .element-block.error {
+            background-color: #fca5a5 !important;
+            animation: shake 0.5s;
+        }
+
+        /* 索引和地址标签 */
+        .idx-label {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            font-size: 0.6rem;
+            color: #64748b;
+            opacity: 0.7;
+        }
+
+        .addr-label {
+            position: absolute;
+            top: -16px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.6rem;
+            color: #94a3b8;
+            font-family: monospace;
+            white-space: nowrap;
+        }
+
+        /* 当前操作指示器 */
+        .current-indicator {
+            position: absolute;
+            left: -20px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--primary-color);
+            font-size: 1.2rem;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .array-container.selected .current-indicator {
+            opacity: 1;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        /* 异常弹窗模拟 */
+        .exception-popup {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            background: #fff;
+            border: 2px solid #ef4444;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            z-index: 100;
+            text-align: center;
+            opacity: 0;
+            transition: all 0.3s;
+        }
+        .exception-popup.show {
+            transform: translate(-50%, -50%) scale(1);
+            opacity: 1;
+        }
+        .exception-title { color: #ef4444; font-weight: bold; margin-bottom: 10px; display:block; font-size:1.2rem;}
+
+    </style>
+</head>
+<body>
+
+    <h1>C++ STL std::array 内存与操作可视化</h1>
+    <div class="subtitle">
+        std::array 是固定大小的栈上数组。请点击某个数组以<b>选中它</b>进行操作。<br>
+        您可以连续声明多个数组以观察栈的生长。
+    </div>
+
+    <div class="main-container">
+        <!-- 左侧操作 -->
+        <div class="controls">
+            <div class="control-group">
+                <h3>声明与定义 <button class="btn-reset" onclick="viz.reset()">清空重置</button></h3>
+                <button onclick="viz.createArray(false)">
+                    <span>std::array&lt;int, 5&gt; arr;</span>
+                    <span class="btn-tag tag-unsafe">垃圾值</span>
+                </button>
+                <button onclick="viz.createArray(true)">
+                    <span>std::array&lt;int, 5&gt; arr{};</span>
+                    <span class="btn-tag tag-safe">零初始化</span>
+                </button>
+            </div>
+
+            <div class="control-group">
+                <h3>访问 (作用于选中数组)</h3>
+                <button onclick="viz.accessIndex(2)">
+                    <span>arr[2] = 99;</span>
+                    <span class="btn-tag tag-unsafe">无检查</span>
+                </button>
+                <button onclick="viz.accessAt(2)">
+                    <span>arr.at(2) = 88;</span>
+                    <span class="btn-tag tag-safe">抛异常</span>
+                </button>
+                <button onclick="viz.accessIndex(10)">
+                    <span>arr[10] (越界)</span>
+                    <span class="btn-tag tag-unsafe">UB</span>
+                </button>
+                <button onclick="viz.accessAt(10)">
+                    <span>arr.at(10) (越界)</span>
+                    <span class="btn-tag tag-safe">Throw</span>
+                </button>
+            </div>
+
+            <div class="control-group">
+                <h3>算法 (作用于选中数组)</h3>
+                <button onclick="viz.fillArray(7)">
+                    <span>arr.fill(7);</span>
+                </button>
+                <button onclick="viz.showSwapDemo()">
+                    <span>arr.swap(neighbor);</span>
+                    <span class="btn-tag tag-slow">O(N)</span>
+                </button>
+                <button onclick="viz.pointerArith()">
+                    <span>*(arr.data() + 1)</span>
+                </button>
+            </div>
+
+            <div class="log-panel" id="logPanel">
+                <div class="log-entry">// 系统就绪。请先声明一个数组。</div>
+            </div>
+        </div>
+
+        <!-- 右侧可视化 -->
+        <div class="viz-area">
+            <div class="stack-memory" id="stackContainer">
+                <!-- Stack Frame -->
+                <div class="stack-frame" id="stackFrame">
+                    <div id="empty-hint" style="text-align:center; color:#94a3b8; padding:20px;">
+                        (栈帧为空，请点击左侧按钮声明数组)
+                    </div>
+                </div>
+            </div>
+
+            <!-- Exception Popup -->
+            <div class="exception-popup" id="exceptionPopup">
+                <span class="exception-title">std::out_of_range</span>
+                <div>what(): array::at: __n (which is 10) >= _Nm (which is 5)</div>
+                <div style="margin-top:10px; font-size:0.8rem; color:#64748b;">(程序已捕获异常，继续运行)</div>
+            </div>
+        </div>
+    </div>
+
+<script>
+class ArrayVisualizer {
+    constructor() {
+        this.container = document.getElementById('stackFrame');
+        this.logPanel = document.getElementById('logPanel');
+        this.popup = document.getElementById('exceptionPopup');
+        this.emptyHint = document.getElementById('empty-hint');
+        
+        this.arrays = []; // Store array objects { name, data, id, index }
+        this.arrayCounter = 0;
+        this.baseAddress = 0x7FFF0080; // High stack address
+        this.arraySize = 5;
+        this.selectedArrayId = null;
+    }
+
+    log(msg, type = 'normal') {
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        if (type === 'error') entry.className += ' log-error';
+        if (type === 'success') entry.className += ' log-success';
+        if (type === 'warn') entry.className += ' log-warn';
+        entry.innerText = `> ${msg}`;
+        this.logPanel.prepend(entry);
+    }
+
+    reset() {
+        this.arrays = [];
+        this.arrayCounter = 0;
+        this.baseAddress = 0x7FFF0080;
+        this.selectedArrayId = null;
+        
+        const children = Array.from(this.container.children);
+        children.forEach(child => {
+            if (child.id !== 'empty-hint') child.remove();
+        });
+        this.emptyHint.style.display = 'block';
+        this.log("栈内存已清空。", 'warn');
+    }
+
+    createArray(zeroInit) {
+        if (this.emptyHint.style.display !== 'none') {
+            this.emptyHint.style.display = 'none';
+        }
+
+        this.arrayCounter++;
+        const name = `arr${this.arrayCounter}`;
+        
+        // Calculate Address (Stack grows down)
+        const currentAddr = this.baseAddress - (this.arrays.length * 24);
+        
+        let initialData;
+        if (zeroInit) {
+            initialData = [0, 0, 0, 0, 0];
+            this.log(`${name}{}: 零初始化完成。栈顶地址: 0x${currentAddr.toString(16).toUpperCase()}`, 'success');
+        } else {
+            initialData = Array.from({length: 5}, () => Math.floor(Math.random() * 20000) - 10000);
+            this.log(`${name}; 默认初始化。注意：包含栈内存残留的垃圾值！`, 'warn');
+        }
+
+        const newArrayObj = {
+            id: `array-${this.arrayCounter}`,
+            name: name,
+            data: initialData,
+            address: currentAddr,
+            isGarbage: !zeroInit
+        };
+
+        this.arrays.push(newArrayObj);
+        this.renderNewArray(newArrayObj);
+        // Auto select new array
+        this.selectArray(newArrayObj.id);
+    }
+
+    renderNewArray(arrObj) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'array-container';
+        wrapper.id = arrObj.id;
+        wrapper.onclick = () => this.selectArray(arrObj.id);
+
+        const label = document.createElement('div');
+        label.className = 'array-label';
+        label.innerHTML = `
+            <span>${arrObj.name}</span> 
+            <span>&lt;int, 5&gt; @ 0x${arrObj.address.toString(16).toUpperCase()}</span>
+        `;
+        
+        // Active indicator
+        const indicator = document.createElement('span');
+        indicator.className = 'current-indicator';
+        indicator.innerHTML = '➤';
+        wrapper.appendChild(indicator);
+        wrapper.appendChild(label);
+
+        const blocks = document.createElement('div');
+        blocks.className = 'array-blocks';
+
+        arrObj.data.forEach((val, i) => {
+            const block = document.createElement('div');
+            block.className = 'element-block';
+            block.id = `${arrObj.id}-block-${i}`;
+            
+            this.updateBlockContent(block, val, arrObj.isGarbage);
+
+            // Addr Label
+            const elemAddr = arrObj.address + (i * 4);
+            const addrLabel = document.createElement('span');
+            addrLabel.className = 'addr-label';
+            addrLabel.innerText = `...${elemAddr.toString(16).slice(-2).toUpperCase()}`; 
+            
+            // Idx Label
+            const idxLabel = document.createElement('span');
+            idxLabel.className = 'idx-label';
+            idxLabel.innerText = i;
+
+            block.appendChild(addrLabel);
+            block.appendChild(idxLabel);
+            blocks.appendChild(block);
+        });
+
+        wrapper.appendChild(blocks);
+        this.container.appendChild(wrapper);
+        this.container.parentNode.scrollTop = this.container.parentNode.scrollHeight;
+    }
+
+    selectArray(id) {
+        this.selectedArrayId = id;
+        
+        // Update Visuals
+        const allArrays = this.container.querySelectorAll('.array-container');
+        allArrays.forEach(el => el.classList.remove('selected'));
+        
+        const target = document.getElementById(id);
+        if (target) {
+            target.classList.add('selected');
+            const arrObj = this.arrays.find(a => a.id === id);
+            // Optional: log selection
+            // this.log(`已选中: ${arrObj.name}`);
+        }
+    }
+
+    updateBlockContent(blockElement, val, isGarbage) {
+        const existingVal = blockElement.querySelector('.val-text');
+        if(existingVal) existingVal.remove();
+
+        const valSpan = document.createElement('span');
+        valSpan.className = 'val-text';
+        if (isGarbage) {
+            valSpan.innerText = "?";
+            valSpan.title = val; 
+            valSpan.className += ' garbage-val';
+        } else {
+            valSpan.innerText = val;
+        }
+        blockElement.insertBefore(valSpan, blockElement.firstChild);
+    }
+
+    // --- Operations ---
+
+    getActiveArray() {
+        if (this.arrays.length === 0) {
+            this.log("错误：栈为空，请先声明数组！", 'error');
+            return null;
+        }
+        if (!this.selectedArrayId) {
+            // Fallback to last if nothing selected (should cover auto-select)
+            return this.arrays[this.arrays.length - 1];
+        }
+        return this.arrays.find(a => a.id === this.selectedArrayId);
+    }
+
+    accessIndex(idx) {
+        const activeArr = this.getActiveArray();
+        if (!activeArr) return;
+
+        if (idx >= this.arraySize) {
+            this.log(`${activeArr.name}[${idx}] 越界！触发 Undefined Behavior`, 'error');
+            this.shakeArray(activeArr.id);
+        } else {
+            activeArr.data[idx] = 99;
+            activeArr.isGarbage = false;
+            
+            const block = document.getElementById(`${activeArr.id}-block-${idx}`);
+            this.updateBlockContent(block, 99, false);
+            
+            block.classList.add('highlight');
+            setTimeout(() => block.classList.remove('highlight'), 500);
+            this.log(`${activeArr.name}[${idx}] = 99; (直接内存写入)`, 'success');
+        }
+    }
+
+    accessAt(idx) {
+        const activeArr = this.getActiveArray();
+        if (!activeArr) return;
+
+        if (idx >= this.arraySize) {
+            this.log(`${activeArr.name}.at(${idx}) 检测到越界，抛出异常。`, 'error');
+            this.popup.classList.add('show');
+            setTimeout(() => this.popup.classList.remove('show'), 2000);
+        } else {
+            activeArr.data[idx] = 88;
+            const block = document.getElementById(`${activeArr.id}-block-${idx}`);
+            this.updateBlockContent(block, 88, false);
+            
+            block.classList.add('access');
+            setTimeout(() => block.classList.remove('access'), 500);
+            this.log(`${activeArr.name}.at(${idx}) = 88; (安全写入)`, 'success');
+        }
+    }
+
+    fillArray(val) {
+        const activeArr = this.getActiveArray();
+        if (!activeArr) return;
+
+        activeArr.data = activeArr.data.map(() => val);
+        activeArr.isGarbage = false;
+
+        for(let i=0; i<this.arraySize; i++) {
+            const block = document.getElementById(`${activeArr.id}-block-${i}`);
+            this.updateBlockContent(block, val, false);
+            block.classList.add('access');
+        }
+        
+        setTimeout(() => {
+            for(let i=0; i<this.arraySize; i++) {
+                document.getElementById(`${activeArr.id}-block-${i}`).classList.remove('access');
+            }
+        }, 500);
+        
+        this.log(`${activeArr.name}.fill(${val}); 遍历全部元素赋值`);
+    }
+
+    pointerArith() {
+        const activeArr = this.getActiveArray();
+        if (!activeArr) return;
+
+        const block0 = document.getElementById(`${activeArr.id}-block-0`);
+        const block1 = document.getElementById(`${activeArr.id}-block-1`);
+        
+        block0.style.backgroundColor = '#ddd';
+        this.log(`${activeArr.name}.data() 指向首地址...`);
+        
+        setTimeout(() => {
+            block0.style.backgroundColor = '';
+            block1.classList.add('highlight');
+            
+            let val = activeArr.data[1];
+            let displayVal = activeArr.isGarbage ? "?" : val;
+            
+            this.log(`*(${activeArr.name}.data() + 1) 访问偏移地址，值为 ${displayVal}`);
+            setTimeout(() => block1.classList.remove('highlight'), 800);
+        }, 600);
+    }
+
+    async showSwapDemo() {
+        const activeArr = this.getActiveArray();
+        if (!activeArr) return;
+
+        // Find swap target (neighbor below, or any other)
+        const idx = this.arrays.findIndex(a => a.id === activeArr.id);
+        let targetArr = null;
+        
+        // Try to swap with previous (below in list index, above in stack visual if ordered by push)
+        if (idx > 0) targetArr = this.arrays[idx - 1];
+        else if (this.arrays.length > 1) targetArr = this.arrays[idx + 1];
+        
+        if (!targetArr) {
+            this.log("Swap 需要至少两个数组！请再声明一个。", 'error');
+            return;
+        }
+
+        this.log(`准备交换 ${activeArr.name} 和 ${targetArr.name} ...`);
+        this.log("std::array 交换是 O(N) 的线性操作，需要逐个搬移元素。", 'warn');
+
+        // Animation
+        for (let i = 0; i < this.arraySize; i++) {
+            await new Promise(r => setTimeout(r, 300));
+
+            const b1 = document.getElementById(`${activeArr.id}-block-${i}`);
+            const b2 = document.getElementById(`${targetArr.id}-block-${i}`);
+
+            b1.classList.add('highlight');
+            b2.classList.add('highlight');
+
+            // Swap data logic
+            let temp = activeArr.data[i];
+            activeArr.data[i] = targetArr.data[i];
+            targetArr.data[i] = temp;
+
+            let isB1Garb = b1.querySelector('.garbage-val') !== null;
+            let isB2Garb = b2.querySelector('.garbage-val') !== null;
+            
+            this.updateBlockContent(b1, activeArr.data[i], isB2Garb);
+            this.updateBlockContent(b2, targetArr.data[i], isB1Garb);
+        }
+
+        setTimeout(() => {
+            document.querySelectorAll('.element-block').forEach(el => el.classList.remove('highlight'));
+            this.log("交换完成。", 'success');
+        }, 500);
+    }
+
+    shakeArray(id) {
+        const el = document.getElementById(id);
+        el.style.transform = 'translateX(5px)';
+        setTimeout(() => el.style.transform = 'translateX(-5px)', 50);
+        setTimeout(() => el.style.transform = 'translateX(5px)', 100);
+        setTimeout(() => el.style.transform = 'translateX(0)', 150);
+    }
+}
+
+const viz = new ArrayVisualizer();
+
+</script>
+</body>
+</html>

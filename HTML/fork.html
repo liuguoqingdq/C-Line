@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Linux 进程生命周期沙盘（fork/exec/exit/wait）</title>
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f1a2e;
+      --panel2:#0c1628;
+      --text:#e7eefc;
+      --muted:#a9b6d6;
+      --border:rgba(255,255,255,.12);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --run:#45d483;
+      --ready:#3aa0ff;
+      --block:#ffb020;
+      --zombie:#ff5b6a;
+      --exit:#8a93a7;
+      --accent:#7c9cff;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC","Microsoft YaHei", Arial;
+      background: radial-gradient(1200px 600px at 10% 10%, rgba(124,156,255,.18), transparent 60%),
+                  radial-gradient(900px 500px at 80% 20%, rgba(69,212,131,.12), transparent 60%),
+                  var(--bg);
+      color:var(--text);
+    }
+    header{
+      padding:16px 18px;
+      border-bottom:1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0));
+      position: sticky;
+      top:0;
+      backdrop-filter: blur(10px);
+      z-index: 10;
+    }
+    header .title{
+      display:flex; gap:12px; align-items:baseline; flex-wrap:wrap;
+    }
+    header h1{ margin:0; font-size:18px; letter-spacing:.2px; }
+    header .sub{ color:var(--muted); font-size:13px; }
+    .wrap{
+      display:grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap:14px;
+      padding:14px;
+      max-width: 1400px;
+      margin:0 auto;
+    }
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0)) , var(--panel);
+      border:1px solid var(--border);
+      border-radius:14px;
+      box-shadow: var(--shadow);
+      overflow:hidden;
+      min-height: 78vh;
+    }
+    .card .bar{
+      padding:12px 12px;
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      border-bottom:1px solid var(--border);
+      background: rgba(0,0,0,.15);
+    }
+    .bar .left{
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    }
+    .pill{
+      padding:4px 10px;
+      border:1px solid var(--border);
+      border-radius:999px;
+      font-size:12px;
+      color:var(--muted);
+      background: rgba(255,255,255,.04);
+      user-select:none;
+    }
+    .btns{
+      display:flex; gap:8px; flex-wrap:wrap;
+    }
+    button{
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      padding:8px 10px;
+      border-radius:10px;
+      cursor:pointer;
+      font-size:13px;
+    }
+    button:hover{ background: rgba(255,255,255,.10); }
+    button:active{ transform: translateY(1px); }
+    button.primary{
+      border-color: rgba(124,156,255,.45);
+      background: rgba(124,156,255,.18);
+    }
+    button.danger{
+      border-color: rgba(255,91,106,.45);
+      background: rgba(255,91,106,.14);
+    }
+    button:disabled{
+      opacity:.45; cursor:not-allowed;
+    }
+
+    .grid2{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:12px;
+      padding:12px;
+    }
+
+    .vizRow{
+      display:grid;
+      grid-template-columns: 1.3fr .7fr;
+      gap:12px;
+      align-items:stretch;
+    }
+
+    .panel{
+      background: var(--panel2);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px;
+    }
+
+    .legend{
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+      margin-top:6px;
+    }
+    .dot{
+      width:10px; height:10px; border-radius:50%;
+      display:inline-block; margin-right:6px;
+    }
+    .kv{
+      display:grid;
+      grid-template-columns: 120px 1fr;
+      gap:6px 10px;
+      font-size:13px;
+      margin-top:8px;
+    }
+    .kv div:nth-child(odd){ color: var(--muted); }
+
+    .logs{
+      max-height: 260px;
+      overflow:auto;
+      padding-right:4px;
+    }
+    .log{
+      border-left: 3px solid rgba(124,156,255,.6);
+      padding:8px 10px;
+      margin:8px 0;
+      border-radius:10px;
+      background: rgba(255,255,255,.04);
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.4;
+    }
+    .log small{ color: var(--muted); display:block; margin-top:4px; }
+    code, pre{
+      background: rgba(0,0,0,.28);
+      border:1px solid var(--border);
+      border-radius:12px;
+      color: #eaf2ff;
+    }
+    pre{
+      padding:10px;
+      overflow:auto;
+      margin:10px 0 0;
+      font-size:12px;
+      line-height:1.45;
+    }
+    .hint{
+      border:1px dashed rgba(255,255,255,.22);
+      background: rgba(255,255,255,.03);
+      border-radius:12px;
+      padding:10px;
+      color: var(--muted);
+      font-size:13px;
+      line-height: 1.55;
+    }
+
+    /* SVG */
+    #treeSvg{
+      width:100%;
+      height: 420px;
+      background: rgba(255,255,255,.02);
+      border:1px solid var(--border);
+      border-radius:12px;
+      display:block;
+    }
+    .node{
+      cursor:pointer;
+    }
+    .node rect{
+      rx:12; ry:12;
+      stroke: rgba(255,255,255,.16);
+      stroke-width:1;
+    }
+    .node text{
+      font-size:12px;
+      fill: var(--text);
+      pointer-events:none;
+    }
+    .node .muted{
+      fill: rgba(231,238,252,.7);
+      font-size:11px;
+    }
+    .node.selected rect{
+      stroke: rgba(124,156,255,.9);
+      stroke-width:2;
+      filter: drop-shadow(0px 4px 10px rgba(124,156,255,.25));
+    }
+    .edge{
+      stroke: rgba(255,255,255,.18);
+      stroke-width: 1.5;
+    }
+    .tooltip{
+      position: fixed;
+      z-index: 99;
+      pointer-events: none;
+      transform: translate(12px, 12px);
+      background: rgba(10,18,32,.92);
+      border:1px solid rgba(255,255,255,.18);
+      border-radius: 10px;
+      padding:8px 10px;
+      font-size:12px;
+      color: var(--text);
+      box-shadow: var(--shadow);
+      display:none;
+      max-width: 320px;
+    }
+    .tooltip .t{ color: var(--muted); font-size:11px; margin-top:4px; }
+    .hr{
+      height:1px; background: var(--border); margin:10px 0;
+    }
+
+    /* Right card layout */
+    .rightBody{
+      padding:12px;
+    }
+    .sectionTitle{
+      margin:0 0 8px;
+      font-size:14px;
+      color: #dfe8ff;
+    }
+    .muted{ color: var(--muted); }
+
+    .quiz{
+      display:grid;
+      gap:10px;
+      margin-top:10px;
+    }
+    .q{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px;
+      background: rgba(255,255,255,.03);
+    }
+    .q .qtitle{ font-size:13px; margin:0 0 8px; }
+    .q label{ display:block; font-size:13px; margin:6px 0; color: var(--text); cursor:pointer; }
+    .feedback{
+      margin-top:8px;
+      font-size:13px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+
+<body>
+<header>
+  <div class="title">
+    <h1>Linux 进程生命周期沙盘</h1>
+    <div class="sub">fork / exec / exit / waitpid + 僵尸进程与 SIGCHLD（纯前端模拟）</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- LEFT: Visual + Controls -->
+  <section class="card" id="leftCard">
+    <div class="bar">
+      <div class="left">
+        <span class="pill">时间 t=<span id="timeNow">0</span></span>
+        <span class="pill">当前选中：pid=<span id="selPid">-</span></span>
+        <span class="pill">提示：点击进程节点可切换选中</span>
+      </div>
+      <div class="btns">
+        <button class="primary" id="btnFork">fork()</button>
+        <button class="primary" id="btnExec">exec()</button>
+        <button class="danger" id="btnExit">exit()</button>
+        <button id="btnWait">waitpid()</button>
+        <button id="btnSig">模拟 SIGCHLD</button>
+        <button id="btnReset">reset</button>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="vizRow">
+        <div class="panel">
+          <div class="muted" style="font-size:13px; margin-bottom:8px;">
+            进程树（父子关系）与状态（颜色）
+          </div>
+          <svg id="treeSvg" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
+          <div class="legend">
+            <span class="pill"><span class="dot" style="background:var(--run)"></span>Running</span>
+            <span class="pill"><span class="dot" style="background:var(--ready)"></span>Ready</span>
+            <span class="pill"><span class="dot" style="background:var(--block)"></span>Blocked</span>
+            <span class="pill"><span class="dot" style="background:var(--zombie)"></span>Zombie</span>
+            <span class="pill"><span class="dot" style="background:var(--exit)"></span>Exit</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="muted" style="font-size:13px;">当前选中进程信息</div>
+          <div class="kv" id="infoKV"></div>
+
+          <div class="hr"></div>
+
+          <div class="muted" style="font-size:13px;">状态机（简化）</div>
+          <div class="hint" style="margin-top:8px;">
+            <b>fork</b>：创建子进程（子进程初始 Ready）<br/>
+            <b>exec</b>：替换“程序映像”，pid 不变（进程“换脑子”）<br/>
+            <b>exit</b>：子进程先变 Zombie（等父进程回收）<br/>
+            <b>waitpid</b>：父进程回收子进程，Zombie 消失（变为 Exit/被移除）
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="muted" style="font-size:13px;">事件时间线（日志）</div>
+        <div class="logs" id="logs"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: Explanation + Syscalls + Quiz -->
+  <aside class="card">
+    <div class="bar">
+      <div class="left">
+        <span class="pill">讲解区（你可以把它当成书上第5/6章的“可视化旁白”）</span>
+      </div>
+    </div>
+    <div class="rightBody">
+      <h3 class="sectionTitle">核心直觉</h3>
+      <div class="hint">
+        <b>fork</b> 是“复制出一个新进程（孩子）”，父子从同一行代码继续往下跑，但
+        <b>fork 的返回值不同</b>：父进程得到子 pid，子进程得到 0。<br/><br/>
+        <b>exec</b> 是“把当前进程的代码/数据/栈等运行映像替换成另一个程序”，所以
+        <b>pid 不变</b>，但“程序名/地址空间”变了。<br/><br/>
+        <b>exit</b> 让进程结束；如果它有父进程且父进程还活着，内核会保留一条“死亡记录”
+        （退出码/资源统计）形成 <b>Zombie</b>，直到父进程 <b>wait*</b> 回收。
+      </div>
+
+      <h3 class="sectionTitle" style="margin-top:12px;">系统调用/库函数签名（常用）</h3>
+      <pre><code>#include &lt;sys/types.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;sys/wait.h&gt;
+#include &lt;stdlib.h&gt;
+
+pid_t fork(void);
+
+int execl(const char *path, const char *arg, ... /* (char*)NULL */);
+int execvp(const char *file, char *const argv[]);
+int execve(const char *pathname, char *const argv[], char *const envp[]);
+
+void _exit(int status);   // 直接退出，不刷 stdio 缓冲
+void exit(int status);    // 运行 atexit handler，刷 stdio 缓冲
+
+pid_t wait(int *wstatus);
+pid_t waitpid(pid_t pid, int *wstatus, int options);</code></pre>
+
+      <h3 class="sectionTitle" style="margin-top:12px;">常见坑（速记）</h3>
+      <div class="hint">
+        1) <b>fork 后 stdout 可能被“重复打印”</b>：因为缓冲区被复制，fork 前没 flush 的内容父子都会输出。<br/>
+        2) 在子进程里如果你不想跑 atexit/不想冲刷 stdio，用 <b>_exit</b>。<br/>
+        3) <b>exec 成功不会返回</b>；返回一般意味着失败（检查 errno）。<br/>
+        4) 父进程不 wait，子进程退出会变成 <b>Zombie</b>（直到父进程结束或回收）。<br/>
+        5) waitpid 的 pid 参数语义多（-1/0/&gt;0），别只记“等某个子进程”。
+      </div>
+
+      <h3 class="sectionTitle" style="margin-top:12px;">交互小测（即时反馈）</h3>
+      <div class="quiz">
+        <div class="q" data-ans="B">
+          <p class="qtitle">1）fork() 返回值在父子进程中分别是什么？</p>
+          <label><input type="radio" name="q1" value="A"> A. 父=0，子=子pid</label>
+          <label><input type="radio" name="q1" value="B"> B. 父=子pid，子=0</label>
+          <label><input type="radio" name="q1" value="C"> C. 父=1，子=1</label>
+          <div class="feedback" id="fb1"></div>
+        </div>
+
+        <div class="q" data-ans="C">
+          <p class="qtitle">2）exec() 的关键效果是什么？</p>
+          <label><input type="radio" name="q2" value="A"> A. 创建一个新 pid 的进程</label>
+          <label><input type="radio" name="q2" value="B"> B. 杀掉父进程并接管终端</label>
+          <label><input type="radio" name="q2" value="C"> C. 替换当前进程的程序映像，pid 不变</label>
+          <div class="feedback" id="fb2"></div>
+        </div>
+
+        <div class="q" data-ans="A">
+          <p class="qtitle">3）僵尸进程的“消失”依赖什么？</p>
+          <label><input type="radio" name="q3" value="A"> A. 父进程 wait/waitpid 回收</label>
+          <label><input type="radio" name="q3" value="B"> B. 子进程再次 exec</label>
+          <label><input type="radio" name="q3" value="C"> C. 子进程 sleep 一段时间</label>
+          <div class="feedback" id="fb3"></div>
+        </div>
+      </div>
+
+      <button style="margin-top:10px;" id="btnCheck">检查答案</button>
+    </div>
+  </aside>
+</div>
+
+<div class="tooltip" id="tip"></div>
+
+<script>
+  // =========================
+  // Model: process + timeline
+  // =========================
+  const State = {
+    RUNNING: "Running",
+    READY: "Ready",
+    BLOCKED: "Blocked",
+    ZOMBIE: "Zombie",
+    EXIT: "Exit",
+  };
+
+  const stateColor = (st) => {
+    switch(st){
+      case State.RUNNING: return getCSS("--run");
+      case State.READY: return getCSS("--ready");
+      case State.BLOCKED: return getCSS("--block");
+      case State.ZOMBIE: return getCSS("--zombie");
+      case State.EXIT: return getCSS("--exit");
+      default: return "rgba(255,255,255,.12)";
+    }
+  };
+
+  function getCSS(varName){
+    return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  }
+
+  let time = 0;
+  let nextPid = 1001;
+  let procs = [];
+  let selectedPid = null;
+  let logItems = [];
+
+  function resetModel(){
+    time = 0;
+    nextPid = 1001;
+    procs = [
+      {
+        pid: 1000,
+        ppid: 1,
+        name: "demo_shell",
+        state: State.RUNNING,
+        exitCode: null,
+        createdAt: 0,
+      }
+    ];
+    selectedPid = 1000;
+    logItems = [];
+    logEvent("初始化：创建一个模拟 shell 进程 pid=1000（Running）", "点击左侧 fork/exec/exit/waitpid 观察进程树与状态变化");
+    renderAll();
+  }
+
+  function nowTick(){
+    time += 1;
+    document.getElementById("timeNow").textContent = time;
+  }
+
+  function getProc(pid){
+    return procs.find(p => p.pid === pid) || null;
+  }
+
+  function childrenOf(pid){
+    return procs.filter(p => p.ppid === pid);
+  }
+
+  function zombiesOf(pid){
+    return procs.filter(p => p.ppid === pid && p.state === State.ZOMBIE);
+  }
+
+  function setSelected(pid){
+    const p = getProc(pid);
+    if(!p) return;
+    selectedPid = pid;
+    document.getElementById("selPid").textContent = pid;
+    renderAll();
+  }
+
+  function logEvent(msg, extra=""){
+    logItems.unshift({ t: time, msg, extra });
+    renderLogs();
+  }
+
+  // =========================
+  // Actions
+  // =========================
+  function actFork(){
+    const parent = getProc(selectedPid);
+    if(!parent){ return; }
+    nowTick();
+
+    const childPid = nextPid++;
+    const child = {
+      pid: childPid,
+      ppid: parent.pid,
+      name: parent.name,         // fork 后“程序映像”先一样（模拟）
+      state: State.READY,        // 简化：新创建先进入就绪队列
+      exitCode: null,
+      createdAt: time,
+    };
+    procs.push(child);
+
+    // 简化：父仍 Running；子 Ready
+    logEvent(`fork()：父 pid=${parent.pid} 创建子 pid=${childPid}`,
+             `返回值差异：父进程 fork() 返回 ${childPid}；子进程 fork() 返回 0。`);
+
+    renderAll();
+  }
+
+  function actExec(){
+    const p = getProc(selectedPid);
+    if(!p) return;
+    if(p.state === State.ZOMBIE || p.state === State.EXIT){
+      nowTick();
+      logEvent(`exec()：pid=${p.pid} 当前是 ${p.state}，无法 exec（模拟限制）`);
+      return;
+    }
+    nowTick();
+    const oldName = p.name;
+    // 给一个演示用的新程序名
+    const newName = (oldName === "demo_shell") ? "worker_A" :
+                    (oldName === "worker_A") ? "worker_B" :
+                    (oldName === "worker_B") ? "tiny_httpd" :
+                    "worker_A";
+    p.name = newName;
+
+    // exec 成功后一般不返回；这里只做可视化
+    logEvent(`exec()：pid=${p.pid} 将程序映像从 "${oldName}" 替换为 "${newName}"`,
+             `关键点：pid 不变，但“进程运行的程序”变了（地址空间/代码段等被替换）。`);
+    renderAll();
+  }
+
+  function actExit(){
+    const p = getProc(selectedPid);
+    if(!p) return;
+    nowTick();
+
+    if(p.pid === 1000){
+      // 让示例更清晰：不允许把“模拟 shell”直接 exit（否则大家没父进程回收了）
+      logEvent(`exit()：pid=1000 是演示用 shell，为了方便观察，这里不允许直接 exit（你可以先 fork 出子进程再 exit 子进程）。`);
+      return;
+    }
+
+    if(p.state === State.EXIT){
+      logEvent(`exit()：pid=${p.pid} 已经 Exit，无需重复退出。`);
+      return;
+    }
+    if(p.state === State.ZOMBIE){
+      logEvent(`exit()：pid=${p.pid} 已经是 Zombie（已退出，等待回收）。`);
+      return;
+    }
+
+    // 简化：子进程 exit -> Zombie，等待父进程 wait 回收
+    p.state = State.ZOMBIE;
+    p.exitCode = 0;
+
+    logEvent(`exit()：pid=${p.pid} 退出 -> Zombie（等待父 pid=${p.ppid} 回收）`,
+             `事件：内核会向父进程发送 SIGCHLD（这里用“模拟 SIGCHLD”按钮也可手动触发提示）。`);
+
+    // 选中父进程更方便观察 wait
+    setSelected(p.ppid);
+    renderAll();
+  }
+
+  function actWaitpid(){
+    const parent = getProc(selectedPid);
+    if(!parent) return;
+    nowTick();
+
+    const z = zombiesOf(parent.pid);
+    if(z.length === 0){
+      logEvent(`waitpid()：pid=${parent.pid} 没有 Zombie 子进程可回收`, `因此 waitpid 要么阻塞，要么（带 WNOHANG）返回 0（这里用非阻塞演示）。`);
+      return;
+    }
+
+    // 回收一个 zombie（按创建时间最早）
+    z.sort((a,b)=>a.createdAt - b.createdAt);
+    const target = z[0];
+
+    // 回收：Zombie 消失。这里模拟为从进程表移除（更贴近真实）
+    procs = procs.filter(p => p.pid !== target.pid);
+
+    logEvent(`waitpid()：父 pid=${parent.pid} 回收子 pid=${target.pid}（Zombie 消失）`,
+             `获取退出信息：exitCode=${target.exitCode}（模拟）。回收后该子进程不再出现在进程表中。`);
+
+    renderAll();
+  }
+
+  function actSigchld(){
+    const p = getProc(selectedPid);
+    if(!p) return;
+    nowTick();
+    const zc = zombiesOf(p.pid);
+    if(zc.length === 0){
+      logEvent(`SIGCHLD：pid=${p.pid} 当前没有 Zombie 子进程（模拟提示）`,
+               `真实系统里，SIGCHLD 通常在子进程“状态改变”（退出/停止/继续）时触发，具体取决于选项与信号处理方式。`);
+    }else{
+      logEvent(`SIGCHLD：父 pid=${p.pid} 收到 SIGCHLD（因为有子进程已退出）`,
+               `提示：及时 wait/waitpid 回收，否则子进程会以 Zombie 形式残留。`);
+    }
+    renderAll();
+  }
+
+  // =========================
+  // Rendering: logs + info + tree
+  // =========================
+  function renderLogs(){
+    const box = document.getElementById("logs");
+    box.innerHTML = "";
+    for(const it of logItems){
+      const div = document.createElement("div");
+      div.className = "log";
+      div.innerHTML = `<b>[t=${it.t}]</b> ${escapeHTML(it.msg)}`
+        + (it.extra ? `<small>${escapeHTML(it.extra)}</small>` : "");
+      box.appendChild(div);
+    }
+  }
+
+  function renderInfo(){
+    const kv = document.getElementById("infoKV");
+    const p = getProc(selectedPid);
+    if(!p){
+      kv.innerHTML = `<div>pid</div><div class="muted">-</div>`;
+      return;
+    }
+    const kids = childrenOf(p.pid);
+    const zombies = zombiesOf(p.pid);
+    kv.innerHTML = `
+      <div>pid</div><div><b>${p.pid}</b></div>
+      <div>ppid</div><div>${p.ppid}</div>
+      <div>name</div><div>${escapeHTML(p.name)}</div>
+      <div>state</div><div><span style="display:inline-flex;align-items:center;gap:8px;">
+        <span class="dot" style="background:${stateColor(p.state)}"></span>${p.state}
+      </span></div>
+      <div>children</div><div>${kids.length}（Zombie: ${zombies.length}）</div>
+      <div>createdAt</div><div>t=${p.createdAt}</div>
+      <div>exitCode</div><div>${p.exitCode === null ? "-" : p.exitCode}</div>
+    `;
+  }
+
+  // Simple tree layout: roots at left, children to right
+  function buildTreeLevels(){
+    // find roots (ppid not in table)
+    const pidSet = new Set(procs.map(p=>p.pid));
+    const roots = procs.filter(p=>!pidSet.has(p.ppid));
+    // for this demo, if no root, fallback: pid=1000
+    if(roots.length === 0){
+      const p = getProc(1000);
+      return p ? [[p]] : [];
+    }
+
+    // BFS by levels (not perfect but ok for demo)
+    const levels = [];
+    let current = roots;
+    const visited = new Set();
+    while(current.length){
+      levels.push(current);
+      const next = [];
+      for(const p of current){
+        visited.add(p.pid);
+        const kids = childrenOf(p.pid).filter(k=>!visited.has(k.pid));
+        for(const k of kids) next.push(k);
+      }
+      current = next;
+    }
+    return levels;
+  }
+
+  function renderTree(){
+    const svg = document.getElementById("treeSvg");
+    svg.innerHTML = "";
+
+    const levels = buildTreeLevels();
+    const W = 900, H = 420;
+    const nodeW = 210, nodeH = 54;
+    const xGap = 90, yGap = 18;
+
+    // Compute positions per level
+    const pos = new Map(); // pid -> {x,y}
+    for(let li=0; li<levels.length; li++){
+      const col = levels[li];
+      const totalH = col.length * nodeH + (col.length - 1) * yGap;
+      let y0 = (H - totalH)/2;
+      const x = 40 + li * (nodeW + xGap);
+      for(let i=0; i<col.length; i++){
+        const p = col[i];
+        const y = y0 + i * (nodeH + yGap);
+        pos.set(p.pid, {x,y});
+      }
+    }
+
+    // Draw edges first
+    for(const p of procs){
+      const parent = getProc(p.ppid);
+      if(!parent) continue;
+      const a = pos.get(parent.pid);
+      const b = pos.get(p.pid);
+      if(!a || !b) continue;
+
+      const x1 = a.x + nodeW, y1 = a.y + nodeH/2;
+      const x2 = b.x, y2 = b.y + nodeH/2;
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+      path.setAttribute("class","edge");
+      // cubic curve
+      const cx1 = x1 + 30, cy1 = y1;
+      const cx2 = x2 - 30, cy2 = y2;
+      path.setAttribute("d", `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`);
+      svg.appendChild(path);
+    }
+
+    // Draw nodes
+    for(const p of procs){
+      const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+      g.setAttribute("class", "node" + (p.pid === selectedPid ? " selected" : ""));
+      const {x,y} = pos.get(p.pid) || {x:40,y:40};
+
+      const rect = document.createElementNS("http://www.w3.org/2000/svg","rect");
+      rect.setAttribute("x", x);
+      rect.setAttribute("y", y);
+      rect.setAttribute("width", nodeW);
+      rect.setAttribute("height", nodeH);
+      rect.setAttribute("fill", hexWithAlpha(stateColor(p.state), 0.18));
+      rect.setAttribute("stroke", "rgba(255,255,255,.16)");
+      svg.appendChild(g);
+      g.appendChild(rect);
+
+      const t1 = document.createElementNS("http://www.w3.org/2000/svg","text");
+      t1.setAttribute("x", x+12);
+      t1.setAttribute("y", y+20);
+      t1.textContent = `${p.name}`;
+      g.appendChild(t1);
+
+      const t2 = document.createElementNS("http://www.w3.org/2000/svg","text");
+      t2.setAttribute("x", x+12);
+      t2.setAttribute("y", y+40);
+      t2.setAttribute("class","muted");
+      t2.textContent = `pid=${p.pid}  ppid=${p.ppid}  state=${p.state}`;
+      g.appendChild(t2);
+
+      // click select
+      g.addEventListener("click", () => setSelected(p.pid));
+
+      // tooltip
+      g.addEventListener("mousemove", (ev) => {
+        showTip(ev.clientX, ev.clientY, p);
+      });
+      g.addEventListener("mouseleave", hideTip);
+
+      svg.appendChild(g);
+    }
+  }
+
+  function hexWithAlpha(color, alpha){
+    // color may already be rgb/var; just return rgba if possible
+    // stateColor returns CSS variable resolved -> hex? actually returns rgb? on most browsers it's rgb(...)
+    // We'll handle rgb(...) or hex
+    if(color.startsWith("rgb(")){
+      const nums = color.slice(4,-1).split(",").map(s=>parseInt(s.trim(),10));
+      return `rgba(${nums[0]},${nums[1]},${nums[2]},${alpha})`;
+    }
+    if(color.startsWith("#")){
+      const hex = color.replace("#","");
+      const r = parseInt(hex.slice(0,2),16);
+      const g = parseInt(hex.slice(2,4),16);
+      const b = parseInt(hex.slice(4,6),16);
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
+    // fallback
+    return `rgba(255,255,255,${alpha})`;
+  }
+
+  function renderAll(){
+    document.getElementById("timeNow").textContent = time;
+    document.getElementById("selPid").textContent = selectedPid ?? "-";
+    renderInfo();
+    renderTree();
+    updateButtons();
+  }
+
+  function updateButtons(){
+    const p = getProc(selectedPid);
+    const forkBtn = document.getElementById("btnFork");
+    const execBtn = document.getElementById("btnExec");
+    const exitBtn = document.getElementById("btnExit");
+    const waitBtn = document.getElementById("btnWait");
+    const sigBtn  = document.getElementById("btnSig");
+
+    const disabled = !p;
+    forkBtn.disabled = disabled || (p && (p.state===State.ZOMBIE || p.state===State.EXIT));
+    execBtn.disabled = disabled || (p && (p.state===State.ZOMBIE || p.state===State.EXIT));
+    exitBtn.disabled = disabled || (p && (p.state===State.EXIT));
+    // waitpid 只对父进程“可能有子”才有意义，但不强制禁用
+    waitBtn.disabled = disabled;
+    sigBtn.disabled = disabled;
+  }
+
+  // =========================
+  // Tooltip
+  // =========================
+  const tip = document.getElementById("tip");
+  function showTip(x,y,p){
+    tip.style.left = x+"px";
+    tip.style.top  = y+"px";
+    tip.style.display = "block";
+    const kids = childrenOf(p.pid);
+    const zombies = zombiesOf(p.pid);
+    tip.innerHTML = `
+      <div><b>${escapeHTML(p.name)}</b></div>
+      <div class="t">pid=${p.pid} · ppid=${p.ppid} · state=${p.state}</div>
+      <div class="t">children=${kids.length} (Zombie=${zombies.length}) · createdAt=t=${p.createdAt}</div>
+      <div class="t">提示：子进程 exit 后会变 Zombie，直到父 waitpid 回收。</div>
+    `;
+  }
+  function hideTip(){
+    tip.style.display = "none";
+  }
+
+  // =========================
+  // Quiz
+  // =========================
+  document.getElementById("btnCheck").addEventListener("click", () => {
+    checkOne("q1","fb1","B","父进程返回子 pid；子进程返回 0。");
+    checkOne("q2","fb2","C","exec 替换当前进程映像，pid 不变。");
+    checkOne("q3","fb3","A","Zombie 需要父进程 wait/waitpid 回收才会消失。");
+  });
+
+  function checkOne(name, fbId, ans, explain){
+    const el = document.querySelector(`input[name="${name}"]:checked`);
+    const fb = document.getElementById(fbId);
+    if(!el){
+      fb.textContent = "未选择答案。";
+      return;
+    }
+    if(el.value === ans){
+      fb.textContent = "✅ 正确：" + explain;
+    }else{
+      fb.textContent = "❌ 错误：" + explain;
+    }
+  }
+
+  // =========================
+  // Helpers
+  // =========================
+  function escapeHTML(s){
+    return String(s)
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  // =========================
+  // Wire UI
+  // =========================
+  document.getElementById("btnFork").addEventListener("click", actFork);
+  document.getElementById("btnExec").addEventListener("click", actExec);
+  document.getElementById("btnExit").addEventListener("click", actExit);
+  document.getElementById("btnWait").addEventListener("click", actWaitpid);
+  document.getElementById("btnSig").addEventListener("click", actSigchld);
+  document.getElementById("btnReset").addEventListener("click", resetModel);
+
+  // init
+  resetModel();
+</script>
+</body>
+</html>

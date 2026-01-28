@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>堆优化 Dijkstra 算法可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;800&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .line-highlight {
+            background-color: rgba(99, 102, 241, 0.3);
+            border-left: 2px solid #6366f1;
+            color: white !important;
+        }
+        .transition-all {
+            transition: all 0.3s ease;
+        }
+        svg {
+            user-select: none;
+        }
+        .node-active {
+            filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.6));
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 overflow-hidden h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-white border-b px-6 py-3 flex justify-between items-center shadow-sm z-20">
+        <div class="flex items-center gap-3">
+            <div class="bg-indigo-600 p-2 rounded-lg text-white">
+                <i data-lucide="layers"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold">堆优化 Dijkstra 内部结构可视化</h1>
+                <p class="text-[10px] text-slate-500 uppercase tracking-tighter">Heap Visualization & Graph State</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-4">
+            <div class="flex bg-slate-100 p-1 rounded-lg border">
+                <button id="viewGraphBtn" class="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all bg-white shadow-sm text-indigo-600">
+                    <i data-lucide="git-graph" class="w-4 h-4"></i> 图视图
+                </button>
+                <button id="viewTreeBtn" class="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all text-slate-500 hover:text-slate-700">
+                    <i data-lucide="tree-deciduous" class="w-4 h-4"></i> 堆结构 (Tree)
+                </button>
+            </div>
+
+            <div class="h-6 w-px bg-slate-200"></div>
+
+            <div class="flex gap-2">
+                <button id="resetBtn" class="p-2 hover:bg-slate-100 rounded-full text-slate-600" title="重置"><i data-lucide="rotate-ccw" class="w-5 h-5"></i></button>
+                <button id="playBtn" class="flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
+                    <i data-lucide="play" class="w-4 h-4 fill-current"></i> <span id="playBtnText">自动播放</span>
+                </button>
+                <button id="nextBtn" class="flex items-center gap-2 px-4 py-1.5 bg-white border border-slate-200 rounded-full text-sm font-bold hover:border-slate-400 transition-all">
+                    下一步 <i data-lucide="skip-forward" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden">
+        <!-- Sidebar: Code & State -->
+        <div class="w-80 border-r bg-white flex flex-col shadow-inner shrink-0">
+            <div class="p-4 border-b">
+                <h2 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">代码执行流</h2>
+                <div id="codeContainer" class="bg-slate-900 rounded-lg p-3 font-mono text-[11px] leading-relaxed shadow-lg text-slate-500">
+                    <!-- Code lines injected here -->
+                </div>
+            </div>
+
+            <div class="p-4 flex-1 flex flex-col overflow-hidden">
+                <h2 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">距离数组 dist[]</h2>
+                <div id="distContainer" class="space-y-1.5 overflow-y-auto pr-2">
+                    <!-- Dist items injected here -->
+                </div>
+            </div>
+
+            <div class="p-4 bg-indigo-50 border-t">
+                <div class="flex gap-2 text-indigo-700">
+                    <i data-lucide="info" class="shrink-0 mt-0.5 w-4 h-4"></i>
+                    <p id="messageText" class="text-xs font-medium leading-snug">准备中...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: Visualization Area -->
+        <div class="flex-1 bg-white relative overflow-hidden">
+            <!-- Graph View SVG -->
+            <svg id="graphSvg" class="w-full h-full" viewBox="0 0 700 400"></svg>
+            
+            <!-- Tree View SVG (Hidden by default) -->
+            <div id="treeContainer" class="absolute inset-0 w-full h-full p-8 flex flex-col hidden">
+                <div class="mb-4 text-center">
+                    <h3 class="text-sm font-bold text-slate-500">当前二叉堆状态 (Binary Min-Heap)</h3>
+                    <p id="heapArrayText" class="text-xs text-slate-400 font-mono"></p>
+                </div>
+                <svg id="treeSvg" class="flex-1 w-full" viewBox="0 0 600 350"></svg>
+            </div>
+
+            <!-- Legend -->
+            <div class="absolute bottom-6 left-6 bg-white/80 backdrop-blur-sm p-3 rounded-lg border border-slate-200 text-[10px] space-y-1.5">
+                <div class="flex items-center gap-2"><div class="w-2.5 h-2.5 rounded-full bg-amber-400 border border-amber-600"></div> 堆顶 (Heap Root)</div>
+                <div class="flex items-center gap-2"><div class="w-2.5 h-2.5 rounded-full bg-green-500"></div> 已访问 (Visited)</div>
+                <div class="flex items-center gap-2"><div class="w-2.5 h-2.5 rounded-full bg-indigo-500"></div> 当前焦点</div>
+            </div>
+        </div>
+
+        <!-- Right: PQ List -->
+        <div class="w-56 border-l bg-slate-50 p-4 shrink-0 flex flex-col overflow-hidden">
+            <h2 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">堆顶 (PQ.top)</h2>
+            <div id="pqTopCard" class="bg-amber-100 border border-amber-200 p-3 rounded-lg shadow-sm text-amber-900 mb-6 hidden">
+                <div class="text-[10px] font-bold uppercase opacity-60">最小距离</div>
+                <div id="pqTopDist" class="text-2xl font-mono font-black">0</div>
+                <div id="pqTopNode" class="text-xs font-medium">节点: 0</div>
+            </div>
+            <div id="pqEmptyMsg" class="p-3 border-2 border-dashed rounded-lg text-slate-300 text-xs text-center mb-6">队列为空</div>
+
+            <h2 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">待处理列表</h2>
+            <div id="pqList" class="flex-1 space-y-2 overflow-y-auto">
+                <!-- PQ items injected here -->
+            </div>
+        </div>
+    </main>
+
+    <!-- Progress -->
+    <div class="h-1 bg-slate-200">
+        <div id="progressBar" class="h-full bg-indigo-500 transition-all duration-300" style="width: 0%"></div>
+    </div>
+
+    <script>
+        // --- 1. 数据定义 ---
+        const initialNodes = [
+            { id: 0, x: 100, y: 200 },
+            { id: 1, x: 250, y: 100 },
+            { id: 2, x: 250, y: 300 },
+            { id: 3, x: 450, y: 100 },
+            { id: 4, x: 450, y: 300 },
+            { id: 5, x: 600, y: 200 },
+        ];
+
+        const initialEdges = [
+            { from: 0, to: 1, weight: 4 },
+            { from: 0, to: 2, weight: 2 },
+            { from: 1, to: 2, weight: 1 },
+            { from: 1, to: 3, weight: 5 },
+            { from: 2, to: 3, weight: 8 },
+            { from: 2, to: 4, weight: 10 },
+            { from: 3, to: 4, weight: 2 },
+            { from: 3, to: 5, weight: 6 },
+            { from: 4, to: 5, weight: 3 },
+        ];
+
+        const CPP_CODE = [
+            "priority_queue<pair<int,int>, vector<pair<int,int>>, greater<>> pq;",
+            "dist.assign(n, INF); dist[s] = 0; pq.push({0, s});",
+            "while (!pq.empty()) {",
+            "  auto [d, u] = pq.top(); pq.pop();",
+            "  if (d > dist[u]) continue; // 延迟删除",
+            "  for (auto [v, w] : g[u]) {",
+            "    if (dist[v] > dist[u] + w) {",
+            "      dist[v] = dist[u] + w;",
+            "      pq.push({dist[v], v});",
+            "    }",
+            "  }",
+            "}",
+            "// 算法完成"
+        ];
+
+        // --- 2. 堆结构类 ---
+        class MinHeap {
+            constructor() { this.heap = []; }
+            push(val) {
+                this.heap.push(val);
+                this.bubbleUp();
+            }
+            pop() {
+                if (this.heap.length === 0) return null;
+                const top = this.heap[0];
+                const bottom = this.heap.pop();
+                if (this.heap.length > 0) {
+                    this.heap[0] = bottom;
+                    this.bubbleDown();
+                }
+                return top;
+            }
+            bubbleUp() {
+                let idx = this.heap.length - 1;
+                while (idx > 0) {
+                    let p = Math.floor((idx - 1) / 2);
+                    if (this.heap[idx].d >= this.heap[p].d) break;
+                    [this.heap[idx], this.heap[p]] = [this.heap[p], this.heap[idx]];
+                    idx = p;
+                }
+            }
+            bubbleDown() {
+                let idx = 0;
+                while (true) {
+                    let l = 2 * idx + 1, r = 2 * idx + 2, s = idx;
+                    if (l < this.heap.length && this.heap[l].d < this.heap[s].d) s = l;
+                    if (r < this.heap.length && this.heap[r].d < this.heap[s].d) s = r;
+                    if (s === idx) break;
+                    [this.heap[idx], this.heap[s]] = [this.heap[s], this.heap[idx]];
+                    idx = s;
+                }
+            }
+            getCopy() { return JSON.parse(JSON.stringify(this.heap)); }
+        }
+
+        // --- 3. 核心逻辑：快照生成 ---
+        let snapshots = [];
+        let currentStep = 0;
+        let isPlaying = false;
+        let playInterval = null;
+        let viewMode = 'graph'; // 'graph' or 'tree'
+
+        function initSnapshots() {
+            snapshots = [];
+            const n = initialNodes.length;
+            const g = Array.from({length: n}, () => []);
+            initialEdges.forEach(e => g[e.from].push({v: e.to, w: e.weight}));
+
+            let dist = Array(n).fill(Infinity);
+            let heap = new MinHeap();
+            let visited = new Set();
+            let currentNode = null;
+            let currentEdge = null;
+
+            const addSnap = (line, msg) => {
+                snapshots.push({
+                    line,
+                    dist: [...dist],
+                    heap: heap.getCopy(),
+                    visited: new Set(visited),
+                    currentNode,
+                    currentEdge,
+                    message: msg
+                });
+            };
+
+            const s = 0;
+            dist[s] = 0;
+            heap.push({d: 0, u: s});
+            addSnap(1, `初始化：源点 ${s} 距离设为 0，入堆`);
+
+            while (heap.heap.length > 0) {
+                addSnap(2, "检查堆是否为空...");
+                const {d, u} = heap.pop();
+                currentNode = u;
+                addSnap(3, `pq.pop() 取出堆顶：{距离:${d}, 节点:${u}}`);
+
+                if (d > dist[u]) {
+                    addSnap(4, `延迟删除：堆中旧距离 ${d} > 当前最优值 ${dist[u]}，跳过`);
+                    currentNode = null;
+                    continue;
+                }
+
+                visited.add(u);
+                addSnap(5, `确定节点 ${u} 的最短路径：${dist[u]}`);
+
+                for (const edge of g[u]) {
+                    currentEdge = {from: u, to: edge.v};
+                    const {v, w} = edge;
+                    addSnap(6, `考察邻居 ${v}，边权 ${w}。尝试松弛...`);
+
+                    if (dist[v] > dist[u] + w) {
+                        dist[v] = dist[u] + w;
+                        heap.push({d: dist[v], u: v});
+                        addSnap(8, `成功松弛！更新 dist[${v}] = ${dist[v]}`);
+                        addSnap(9, `将新距离入堆：pq.push({${dist[v]}, ${v}})`);
+                    } else {
+                        addSnap(7, `无法更新 dist[${v}]，维持原样`);
+                    }
+                }
+                currentEdge = null;
+                currentNode = null;
+            }
+            addSnap(11, "算法执行完毕，已找到所有可达点的最短路。");
+        }
+
+        // --- 4. 渲染引擎 ---
+        function render() {
+            const current = snapshots[currentStep];
+            if (!current) return;
+
+            // Update Message & Progress
+            document.getElementById('messageText').innerText = current.message;
+            document.getElementById('progressBar').style.width = `${(currentStep / (snapshots.length - 1)) * 100}%`;
+
+            // Update Code Highlight
+            const codeHtml = CPP_CODE.map((line, i) => {
+                const isHighlight = current.line === i || (i === 1 && current.line === 1);
+                return `<div class="px-2 rounded transition-all ${isHighlight ? 'line-highlight' : ''}">${line}</div>`;
+            }).join('');
+            document.getElementById('codeContainer').innerHTML = codeHtml;
+
+            // Update Dist Table
+            const distHtml = current.dist.map((d, i) => {
+                const isVisited = current.visited.has(i);
+                return `
+                    <div class="flex items-center justify-between p-2 rounded border text-sm ${isVisited ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-100'}">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${isVisited ? 'bg-green-500 text-white' : 'bg-slate-300'}">${i}</span>
+                            <span class="font-medium text-slate-600">节点 ${i}</span>
+                        </div>
+                        <span class="font-mono font-bold text-indigo-600">${d === Infinity ? '∞' : d}</span>
+                    </div>
+                `;
+            }).join('');
+            document.getElementById('distContainer').innerHTML = distHtml;
+
+            // Update PQ List
+            if (current.heap.length > 0) {
+                document.getElementById('pqTopCard').classList.remove('hidden');
+                document.getElementById('pqEmptyMsg').classList.add('hidden');
+                document.getElementById('pqTopDist').innerText = current.heap[0].d;
+                document.getElementById('pqTopNode').innerText = `节点: ${current.heap[0].u}`;
+                
+                const listHtml = current.heap.slice(1).map(item => `
+                    <div class="bg-white border p-2 rounded text-[11px] flex justify-between items-center shadow-xs">
+                        <span class="font-bold text-slate-500"># ${item.u}</span>
+                        <span class="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-indigo-600">dist:${item.d}</span>
+                    </div>
+                `).join('');
+                document.getElementById('pqList').innerHTML = listHtml;
+            } else {
+                document.getElementById('pqTopCard').classList.add('hidden');
+                document.getElementById('pqEmptyMsg').classList.remove('hidden');
+                document.getElementById('pqList').innerHTML = '';
+            }
+
+            // Draw SVGs
+            drawGraph();
+            drawTree();
+        }
+
+        function drawGraph() {
+            const svg = document.getElementById('graphSvg');
+            const current = snapshots[currentStep];
+            let html = '';
+
+            // Edges
+            initialEdges.forEach(e => {
+                const from = initialNodes[e.from], to = initialNodes[e.to];
+                const isActive = current.currentEdge?.from === e.from && current.currentEdge?.to === e.to;
+                html += `
+                    <line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" 
+                        stroke="${isActive ? '#6366f1' : '#f1f5f9'}" stroke-width="${isActive ? 5 : 2}" class="transition-all" />
+                    <text x="${(from.x + to.x)/2}" y="${(from.y + to.y)/2 - 5}" text-anchor="middle" class="text-[10px] fill-slate-400 font-bold font-sans">${e.weight}</text>
+                `;
+            });
+
+            // Nodes
+            initialNodes.forEach(n => {
+                const isCurrent = current.currentNode === n.id;
+                const isVisited = current.visited.has(n.id);
+                const dText = current.dist[n.id] === Infinity ? '∞' : current.dist[n.id];
+                
+                let fill = isCurrent ? '#6366f1' : (isVisited ? '#dcfce7' : 'white');
+                let stroke = isCurrent ? '#4f46e5' : (isVisited ? '#22c55e' : '#e2e8f0');
+                
+                html += `
+                    <g transform="translate(${n.x}, ${n.y})" class="${isCurrent ? 'node-active' : ''}">
+                        <circle r="20" fill="${fill}" stroke="${stroke}" stroke-width="2" class="transition-all" />
+                        <text dy="5" text-anchor="middle" class="font-bold text-sm ${isCurrent ? 'fill-white' : 'fill-slate-600'} font-sans">${n.id}</text>
+                        <text dy="-30" text-anchor="middle" class="text-[11px] font-mono font-bold fill-indigo-500">${dText}</text>
+                    </g>
+                `;
+            });
+            svg.innerHTML = html;
+        }
+
+        function drawTree() {
+            const svg = document.getElementById('treeSvg');
+            const current = snapshots[currentStep];
+            document.getElementById('heapArrayText').innerText = `数组：[${current.heap.map(h => h.d).join(', ')}]`;
+            
+            if (current.heap.length === 0) {
+                svg.innerHTML = '<text x="300" y="150" text-anchor="middle" class="fill-slate-300 italic font-sans">堆当前为空</text>';
+                return;
+            }
+
+            const getPos = (i) => {
+                const level = Math.floor(Math.log2(i + 1));
+                const posInLevel = i - (Math.pow(2, level) - 1);
+                const nodesInLevel = Math.pow(2, level);
+                return { x: (600 / (nodesInLevel + 1)) * (posInLevel + 1), y: 60 + level * 80 };
+            };
+
+            let html = '';
+            current.heap.forEach((item, i) => {
+                const pIdx = Math.floor((i - 1) / 2);
+                if (i > 0) {
+                    const start = getPos(pIdx), end = getPos(i);
+                    html += `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="#e2e8f0" stroke-width="2" />`;
+                }
+            });
+
+            current.heap.forEach((item, i) => {
+                const {x, y} = getPos(i);
+                const isRoot = i === 0;
+                html += `
+                    <g transform="translate(${x}, ${y})">
+                        <circle r="22" fill="${isRoot ? '#fef3c7' : 'white'}" stroke="${isRoot ? '#f59e0b' : '#cbd5e1'}" stroke-width="2" class="shadow-sm" />
+                        <text dy="-2" text-anchor="middle" class="text-[10px] font-bold fill-slate-700 font-sans">d: ${item.d}</text>
+                        <text dy="12" text-anchor="middle" class="text-[10px] fill-slate-400 font-medium font-sans">节点 ${item.u}</text>
+                        <text dx="25" dy="-10" class="text-[8px] fill-slate-300 font-mono italic">idx:${i}</text>
+                    </g>
+                `;
+            });
+            svg.innerHTML = html;
+        }
+
+        // --- 5. 交互控制 ---
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            const btn = document.getElementById('playBtn');
+            const btnText = document.getElementById('playBtnText');
+            if (isPlaying) {
+                btn.classList.replace('bg-indigo-600', 'bg-amber-100');
+                btn.classList.add('text-amber-700');
+                btnText.innerText = '暂停';
+                playInterval = setInterval(() => {
+                    if (currentStep < snapshots.length - 1) {
+                        currentStep++;
+                        render();
+                    } else {
+                        togglePlay();
+                    }
+                }, 800);
+            } else {
+                btn.classList.replace('bg-amber-100', 'bg-indigo-600');
+                btn.classList.remove('text-amber-700');
+                btnText.innerText = '自动播放';
+                clearInterval(playInterval);
+            }
+        }
+
+        function switchView(mode) {
+            viewMode = mode;
+            const gBtn = document.getElementById('viewGraphBtn');
+            const tBtn = document.getElementById('viewTreeBtn');
+            const gSvg = document.getElementById('graphSvg');
+            const tDiv = document.getElementById('treeContainer');
+
+            if (mode === 'graph') {
+                gBtn.className = 'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all bg-white shadow-sm text-indigo-600';
+                tBtn.className = 'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all text-slate-500 hover:text-slate-700';
+                gSvg.classList.remove('hidden');
+                tDiv.classList.add('hidden');
+            } else {
+                tBtn.className = 'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all bg-white shadow-sm text-indigo-600';
+                gBtn.className = 'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all text-slate-500 hover:text-slate-700';
+                gSvg.classList.add('hidden');
+                tDiv.classList.remove('hidden');
+            }
+        }
+
+        document.getElementById('playBtn').addEventListener('click', togglePlay);
+        document.getElementById('nextBtn').addEventListener('click', () => {
+            if (currentStep < snapshots.length - 1) {
+                currentStep++;
+                render();
+            }
+        });
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            currentStep = 0;
+            if (isPlaying) togglePlay();
+            render();
+        });
+        document.getElementById('viewGraphBtn').addEventListener('click', () => switchView('graph'));
+        document.getElementById('viewTreeBtn').addEventListener('click', () => switchView('tree'));
+
+        // 初始化
+        window.onload = () => {
+            lucide.createIcons();
+            initSnapshots();
+            render();
+        };
+    </script>
+</body>
+</html>

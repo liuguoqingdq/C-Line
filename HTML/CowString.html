@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ Copy-On-Write (COW) String 演示</title>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        /* Custom scrollbar for logs */
+        .log-container::-webkit-scrollbar { width: 8px; }
+        .log-container::-webkit-scrollbar-track { background: #0f172a; }
+        .log-container::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .log-container::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- 图标组件 (SVG) ---
+        const IconBase = ({ d, size = 16, className = "" }) => (
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width={size} 
+                height={size} 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className={className}
+            >
+                {d}
+            </svg>
+        );
+
+        const Cpu = (props) => <IconBase {...props} d={<><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1V4" /><path d="M15 1V4" /><path d="M9 20V23" /><path d="M15 20V23" /><path d="M20 9H23" /><path d="M20 14H23" /><path d="M1 9H4" /><path d="M1 14H4" /></>} />;
+        const Database = (props) => <IconBase {...props} d={<><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /></>} />;
+        const ShieldCheck = (props) => <IconBase {...props} d={<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" /><path d="m9 12 2 2 4-4" /></>} />;
+        const RefreshCw = (props) => <IconBase {...props} d={<><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></>} />;
+        const Plus = (props) => <IconBase {...props} d={<><path d="M5 12h14" /><path d="M12 5v14" /></>} />;
+        const Copy = (props) => <IconBase {...props} d={<><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></>} />;
+        const Trash2 = (props) => <IconBase {...props} d={<><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><line x1="10" x2="10" y1="11" y2="17" /><line x1="14" x2="14" y1="11" y2="17" /></>} />;
+        const ArrowRight = (props) => <IconBase {...props} d={<><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></>} />;
+        const Eye = (props) => <IconBase {...props} d={<><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>} />;
+        const Edit3 = (props) => <IconBase {...props} d={<><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></>} />;
+        const Split = (props) => <IconBase {...props} d={<><path d="M16 3h5v5" /><path d="M8 3H3v5" /><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3" /><path d="m15 9 6-6" /></>} />;
+        const X = (props) => <IconBase {...props} d={<><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>} />;
+
+        // --- 常量配置 ---
+        const BLOCK_COLORS = [
+            { bg: 'bg-blue-50', border: 'border-blue-500', text: 'text-blue-900' },
+            { bg: 'bg-emerald-50', border: 'border-emerald-500', text: 'text-emerald-900' },
+            { bg: 'bg-violet-50', border: 'border-violet-500', text: 'text-violet-900' },
+            { bg: 'bg-amber-50', border: 'border-amber-500', text: 'text-amber-900' },
+            { bg: 'bg-rose-50', border: 'border-rose-500', text: 'text-rose-900' },
+        ];
+
+        const App = () => {
+            // --- State ---
+            const [blocks, setBlocks] = useState([]);
+            const [strings, setStrings] = useState([]);
+            const [logs, setLogs] = useState([]);
+            const [nextBlockId, setNextBlockId] = useState(1);
+            const [editingChar, setEditingChar] = useState(null);
+
+            // --- Helpers ---
+            const addLog = (type, msg, detail) => {
+                setLogs(prev => [...prev, { id: Date.now() + Math.random(), type, msg, detail }]);
+            };
+
+            const generateAddress = (id) => `0x${(2000 + id * 8).toString(16).toUpperCase()}`;
+
+            // --- Logic 1: Create ---
+            const createString = (varName, content) => {
+                const address = generateAddress(nextBlockId);
+                const colorIdx = (nextBlockId - 1) % BLOCK_COLORS.length;
+                const colorClass = `${BLOCK_COLORS[colorIdx].bg} ${BLOCK_COLORS[colorIdx].border} ${BLOCK_COLORS[colorIdx].text}`;
+                
+                const newBlock = {
+                    id: address,
+                    refCount: 1,
+                    data: content.split(''),
+                    color: colorClass
+                };
+
+                setBlocks(prev => [...prev, newBlock]);
+                setStrings(prev => [...prev, { name: varName, blockId: address }]);
+                setNextBlockId(prev => prev + 1);
+
+                addLog('alloc', `构造 CowString ${varName}("${content}")`, `分配新堆内存 ${address}, 引用计数 = 1`);
+            };
+
+            // --- Logic 2: Copy ---
+            const copyString = (sourceName, newVarName) => {
+                const sourceStr = strings.find(s => s.name === sourceName);
+                if (!sourceStr) return;
+
+                setBlocks(prev => prev.map(b => {
+                    if (b.id === sourceStr.blockId) {
+                        return { ...b, refCount: b.refCount + 1 };
+                    }
+                    return b;
+                }));
+
+                setStrings(prev => [...prev, { name: newVarName, blockId: sourceStr.blockId }]);
+                
+                addLog('copy', `拷贝构造 ${newVarName} = ${sourceName}`, `[浅拷贝] 仅复制指针，共享内存块 ${sourceStr.blockId}，引用计数 +1`);
+            };
+
+            // --- Logic 3: Delete ---
+            const deleteString = (varName) => {
+                const targetStr = strings.find(s => s.name === varName);
+                if (!targetStr) return;
+
+                setBlocks(prev => {
+                    return prev.map(b => {
+                        if (b.id === targetStr.blockId) {
+                            const newCount = b.refCount - 1;
+                            if (newCount === 0) {
+                                addLog('free', `析构 ${varName}`, `[内存释放] 引用计数归零，回收物理内存 ${b.id}`);
+                                return null;
+                            } else {
+                                addLog('info', `析构 ${varName}`, `引用计数减 1，剩余引用: ${newCount}`);
+                                return { ...b, refCount: newCount };
+                            }
+                        }
+                        return b;
+                    }).filter(Boolean);
+                });
+
+                setStrings(prev => prev.filter(s => s.name !== varName));
+            };
+
+            // --- Logic 4: Read ---
+            const readChar = (varName, index) => {
+                const targetStr = strings.find(s => s.name === varName);
+                if (!targetStr) return;
+                const block = blocks.find(b => b.id === targetStr.blockId);
+                if (!block) return;
+
+                const char = block.data[index] || '\0';
+                addLog('read', `读操作: char c = ${varName}[${index}]`, `[Proxy] CharProxy 检测到转换请求 -> 返回只读字符 '${char}'，不触发分裂`);
+            };
+
+            // --- Logic 5: Write ---
+            const writeChar = (varName, index, newChar) => {
+                const targetStr = strings.find(s => s.name === varName);
+                if (!targetStr) return;
+                const currentBlock = blocks.find(b => b.id === targetStr.blockId);
+                if (!currentBlock) return;
+
+                if (currentBlock.refCount > 1) {
+                    addLog('write', `写操作: ${varName}[${index}] = '${newChar}'`, `[Proxy] 检测到赋值 -> [COW触发] 引用计数(${currentBlock.refCount}) > 1，执行深拷贝分裂`);
+
+                    const newAddress = generateAddress(nextBlockId);
+                    const colorIdx = (nextBlockId - 1) % BLOCK_COLORS.length;
+                    const colorClass = `${BLOCK_COLORS[colorIdx].bg} ${BLOCK_COLORS[colorIdx].border} ${BLOCK_COLORS[colorIdx].text}`;
+                    
+                    const newData = [...currentBlock.data];
+                    newData[index] = newChar;
+
+                    const newBlock = {
+                        id: newAddress,
+                        refCount: 1,
+                        data: newData,
+                        color: colorClass
+                    };
+
+                    setBlocks(prev => {
+                        const updatedOld = prev.map(b => b.id === currentBlock.id ? { ...b, refCount: b.refCount - 1 } : b);
+                        return [...updatedOld, newBlock];
+                    });
+                    setNextBlockId(prev => prev + 1);
+
+                    setStrings(prev => prev.map(s => s.name === varName ? { ...s, blockId: newAddress } : s));
+
+                } else {
+                    addLog('write', `写操作: ${varName}[${index}] = '${newChar}'`, `[Proxy] 检测到赋值 -> 引用计数为 1 (独占)，直接原地修改`);
+                    setBlocks(prev => prev.map(b => {
+                        if (b.id === currentBlock.id) {
+                            const newData = [...b.data];
+                            newData[index] = newChar;
+                            return { ...b, data: newData };
+                        }
+                        return b;
+                    }));
+                }
+            };
+
+            // --- Stats ---
+            const totalLogicalChars = strings.reduce((acc, s) => {
+                const b = blocks.find(bk => bk.id === s.blockId);
+                return acc + (b ? b.data.length : 0);
+            }, 0);
+            
+            const totalPhysicalChars = blocks.reduce((acc, b) => acc + b.data.length, 0);
+            const efficiency = totalPhysicalChars === 0 ? 0 : Math.round(((totalLogicalChars - totalPhysicalChars) / totalLogicalChars) * 100);
+
+            // --- Auto Scroll ---
+            const logsContainerRef = useRef(null);
+            
+            useEffect(() => {
+                if (logsContainerRef.current) {
+                    logsContainerRef.current.scrollTo({
+                        top: logsContainerRef.current.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                }
+            }, [logs]);
+
+            const resetAll = () => {
+                setBlocks([]);
+                setStrings([]);
+                setLogs([]);
+                setNextBlockId(1);
+                addLog('info', '系统重置完成', '等待输入...');
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-6 flex flex-col gap-6">
+                    
+                    {/* Top Bar */}
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+                                <Cpu size={32} className="text-indigo-600" />
+                                C++ Copy-On-Write (COW) String 演示
+                            </h1>
+                            <p className="text-slate-500 text-sm mt-1">
+                                可视化演示 <strong>引用计数 (Reference Counting)</strong> 与 <strong>代理模式 (Proxy Pattern)</strong> 的结合
+                            </p>
+                        </div>
+                        <div className="flex gap-3 mt-4 md:mt-0">
+                            <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium">
+                                <Database size={16} />
+                                <span>物理内存: {totalPhysicalChars} 字节</span>
+                            </div>
+                            <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-medium">
+                                <ShieldCheck size={16} />
+                                <span>节省空间: {totalLogicalChars > 0 ? `${efficiency}%` : '0%'}</span>
+                            </div>
+                            <button onClick={resetAll} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors" title="重置">
+                                <RefreshCw size={20} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+                        
+                        {/* Left: Controls & Stack */}
+                        <div className="lg:col-span-5 flex flex-col gap-6">
+                            
+                            {/* Create String Panel */}
+                            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-1">
+                                    <Plus size={14} /> 栈内存分配 (Stack Allocation)
+                                </h2>
+                                
+                                <div className="space-y-4">
+                                    {/* New String */}
+                                    <div className="flex gap-2 items-center">
+                                        <span className="font-mono text-sm text-slate-500">CowString</span>
+                                        <input id="newStrName" type="text" placeholder="s1" className="w-16 px-3 py-2 border rounded-md text-sm font-mono focus:ring-2 ring-indigo-200 outline-none" defaultValue={`s${strings.length + 1}`} />
+                                        <span className="text-sm text-slate-400">("</span>
+                                        <input id="newStrVal" type="text" placeholder="Hello" className="flex-1 px-3 py-2 border rounded-md text-sm font-mono focus:ring-2 ring-indigo-200 outline-none" defaultValue="Hello" />
+                                        <span className="text-sm text-slate-400">");</span>
+                                        <button 
+                                            onClick={() => {
+                                                const nameInput = document.getElementById('newStrName');
+                                                const valInput = document.getElementById('newStrVal');
+                                                if(nameInput.value && !strings.find(s=>s.name===nameInput.value)) {
+                                                    createString(nameInput.value, valInput.value);
+                                                    setTimeout(() => {
+                                                        const nextNum = strings.length + 2;
+                                                        nameInput.value = `s${nextNum}`;
+                                                    }, 0);
+                                                }
+                                            }}
+                                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                                        >
+                                            构造
+                                        </button>
+                                    </div>
+
+                                    {/* Copy String */}
+                                    {strings.length > 0 && (
+                                        <div className="flex gap-2 items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                            <span className="font-mono text-sm text-slate-500">CowString</span>
+                                            <input id="copyTargetName" type="text" className="w-16 px-3 py-2 border rounded-md text-sm font-mono" defaultValue={`s${strings.length + 1}`}/>
+                                            <span className="text-sm font-mono text-slate-400">=</span>
+                                            <select id="copySourceName" className="px-3 py-2 border rounded-md text-sm font-mono bg-white">
+                                                {strings.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                                            </select>
+                                            <span className="text-sm font-mono text-slate-400">;</span>
+                                            <button 
+                                                onClick={() => {
+                                                    const target = document.getElementById('copyTargetName').value;
+                                                    const source = document.getElementById('copySourceName').value;
+                                                    if(target && !strings.find(s=>s.name===target)) copyString(source, target);
+                                                }}
+                                                className="ml-auto bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-1"
+                                            >
+                                                <Copy size={14} /> 拷贝构造
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Variables List */}
+                            <div className="flex flex-col gap-3 flex-1 overflow-y-auto min-h-[300px]">
+                                {strings.length === 0 && (
+                                    <div className="flex flex-col items-center justify-center h-40 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">
+                                        <p>栈中没有变量对象</p>
+                                        <p className="text-xs mt-1">请在上方创建变量</p>
+                                    </div>
+                                )}
+                                
+                                {strings.map((str) => {
+                                    const targetBlock = blocks.find(b => b.id === str.blockId);
+                                    return (
+                                        <div key={str.name} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden transition-all hover:shadow-md">
+                                            <div className="bg-slate-50 px-4 py-3 border-b border-slate-100 flex justify-between items-center">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="font-mono text-lg font-bold text-slate-800">{str.name}</span>
+                                                    <div className="flex items-center gap-1 text-[10px] uppercase font-bold text-slate-400 bg-white px-2 py-1 rounded border border-slate-200">
+                                                        ptr <ArrowRight size={10} /> {str.blockId}
+                                                    </div>
+                                                </div>
+                                                <button onClick={() => deleteString(str.name)} className="text-slate-400 hover:text-red-500 transition-colors">
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
+
+                                            <div className="p-4">
+                                                <div className="flex items-center gap-4 mb-2">
+                                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">代理交互 (Proxy Access)</span>
+                                                    <span className="text-[10px] text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full">点击字符以修改 (Write)，悬停以读取 (Read)</span>
+                                                </div>
+                                                
+                                                <div className="flex flex-wrap gap-1">
+                                                    {targetBlock?.data.map((char, idx) => (
+                                                        <div 
+                                                            key={idx}
+                                                            className="group relative cursor-pointer"
+                                                            onClick={() => setEditingChar({name: str.name, index: idx, val: char})}
+                                                            onMouseEnter={() => readChar(str.name, idx)}
+                                                        >
+                                                            <div className="w-10 h-10 flex items-center justify-center bg-white border-2 border-slate-200 rounded hover:border-indigo-500 hover:text-indigo-600 hover:shadow-lg hover:-translate-y-1 transition-all font-mono text-lg font-bold select-none z-10 relative">
+                                                                {char}
+                                                            </div>
+                                                            <div className="absolute -bottom-4 left-0 w-full text-center text-[9px] text-slate-400 font-mono">
+                                                                {idx}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Right: Heap & Logs */}
+                        <div className="lg:col-span-7 flex flex-col gap-6 h-full">
+                            
+                            {/* Heap Memory */}
+                            <div className="bg-slate-900 p-6 rounded-xl shadow-lg border border-slate-800 relative overflow-hidden min-h-[350px]">
+                                <div className="absolute top-0 right-0 p-4 opacity-10">
+                                    <Database size={120} className="text-white" />
+                                </div>
+
+                                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6 flex items-center gap-2">
+                                    <Database size={14} /> 物理堆内存 (Heap Memory - Shared Blocks)
+                                </h2>
+
+                                <div className="flex flex-wrap gap-6 items-start relative z-10">
+                                    {blocks.length === 0 && (
+                                        <div className="w-full text-center py-20 text-slate-600 border-2 border-dashed border-slate-800 rounded-lg">
+                                            内存是空的
+                                        </div>
+                                    )}
+
+                                    {blocks.map((block) => (
+                                        <div key={block.id} className={`w-full max-w-[280px] bg-white rounded-lg p-0 overflow-hidden shadow-xl transition-all duration-500 border-l-4 ${block.color.replace('text-', 'border-').split(' ')[1]}`}>
+                                            
+                                            <div className="px-4 py-2 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                                                <span className="font-mono text-xs text-slate-500 font-bold">{block.id}</span>
+                                                <div className={`flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full ${block.refCount > 1 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                                    {block.refCount > 1 ? <Split size={12}/> : <ShieldCheck size={12}/>}
+                                                    Ref: {block.refCount}
+                                                </div>
+                                            </div>
+
+                                            <div className="p-4">
+                                                <div className="flex flex-wrap gap-1 mb-3">
+                                                    {block.data.map((c, i) => (
+                                                        <span key={i} className="w-8 h-8 flex items-center justify-center bg-slate-100 rounded text-slate-700 font-mono font-bold text-sm border border-slate-200">
+                                                            {c}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                
+                                                {block.refCount > 1 ? (
+                                                    <div className="text-[10px] text-amber-600 flex items-center gap-1 font-medium bg-amber-50 p-2 rounded">
+                                                        <Split size={12} />
+                                                        共享状态 (Shared) - 写入将触发分裂
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-[10px] text-emerald-600 flex items-center gap-1 font-medium bg-emerald-50 p-2 rounded">
+                                                        <Edit3 size={12} />
+                                                        独占状态 (Exclusive) - 写入将原地修改
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Logs */}
+                            <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden min-h-[300px]">
+                                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">执行日志 (Console / Proxy Logic)</h3>
+                                    <span className="text-[10px] text-slate-400">实时捕捉 C++ 行为模拟</span>
+                                </div>
+                                <div 
+                                    ref={logsContainerRef}
+                                    className="log-container p-0 overflow-y-auto flex-1 font-mono text-sm bg-slate-900 text-slate-300"
+                                >
+                                    <div className="flex flex-col">
+                                        {logs.length === 0 && <div className="p-4 text-slate-600 italic">系统就绪，等待操作...</div>}
+                                        {logs.map((log) => (
+                                            <div key={log.id} className={`p-2 border-b border-slate-800/50 hover:bg-slate-800 transition-colors flex gap-3 ${log.type === 'write' ? 'bg-indigo-900/20' : ''}`}>
+                                                <div className="w-12 text-[10px] text-slate-500 shrink-0 pt-1 text-right uppercase">{log.type}</div>
+                                                <div className="flex-1">
+                                                    <div className="text-slate-200 font-bold">{log.msg}</div>
+                                                    {log.detail && <div className={`text-xs mt-1 ${
+                                                        log.type === 'write' ? 'text-indigo-400' : 
+                                                        log.type === 'copy' ? 'text-emerald-400' :
+                                                        log.type === 'free' ? 'text-rose-400' : 'text-slate-500'
+                                                    }`}>{log.detail}</div>}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                    
+                    {/* Modal for Edit */}
+                    {editingChar && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setEditingChar(null)}>
+                            <div className="bg-white p-6 rounded-xl shadow-2xl w-80 transform scale-100 transition-all border border-slate-200" onClick={e => e.stopPropagation()}>
+                                <div className="flex justify-between items-start mb-4">
+                                    <div>
+                                        <h3 className="text-lg font-bold text-slate-800">修改字符 (Write)</h3>
+                                        <p className="text-xs text-slate-500 font-mono mt-1">
+                                            代码: {editingChar.name}[{editingChar.index}] = '?'
+                                        </p>
+                                    </div>
+                                    <button onClick={() => setEditingChar(null)} className="text-slate-400 hover:text-slate-600">
+                                        <X size={20} />
+                                    </button>
+                                </div>
+                                
+                                <div className="flex gap-3">
+                                    <input 
+                                        autoFocus
+                                        type="text" 
+                                        maxLength="1"
+                                        className="flex-1 border-2 border-indigo-100 focus:border-indigo-500 rounded-lg text-center text-3xl font-mono py-2 outline-none transition-colors text-indigo-700 font-bold"
+                                        placeholder={editingChar.val}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                const target = e.target;
+                                                if (target.value) {
+                                                    writeChar(editingChar.name, editingChar.index, target.value);
+                                                    setEditingChar(null);
+                                                }
+                                            }
+                                            if (e.key === 'Escape') setEditingChar(null);
+                                        }}
+                                    />
+                                    <button 
+                                        className="bg-indigo-600 text-white px-5 rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-sm active:transform active:scale-95"
+                                        onClick={(e) => {
+                                            const input = e.currentTarget.previousElementSibling;
+                                            if (input.value) {
+                                                writeChar(editingChar.name, editingChar.index, input.value);
+                                                setEditingChar(null);
+                                            }
+                                        }}
+                                    >
+                                        确认
+                                    </button>
+                                </div>
+                                <p className="text-[10px] text-slate-400 mt-4 text-center">
+                                    输入新字符并按 Enter。如果是共享块，将触发 COW。
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
